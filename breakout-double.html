@@ -156,37 +156,39 @@ import * as THREE from 'three';
    ・パドルは奥行き方向に長い1本のバーを共有
    ・ボールとブロックはレイヤーごと。衝突判定は各レイヤーで独立
 
-   座標系は (u, v) で統一する：
+   座標系は (u, v)：
      u … パドル側を 0、ブロック／奥の壁方向を + とする軸（ボールの主進行方向）
      v … パドルの移動軸（中央 0）
-   縦レイアウト（スマホ）では u を画面の上方向に、横レイアウト（PC・タブレット）
-   では u を画面の右方向に割り当てる。横レイアウトは画面が横長なぶん
-   フィールドの U を大きく取り、パドルとブロックの距離を離して
-   プレイヤーが操作する時間の余裕を稼ぐのが狙い。
+   レイアウトはウィンドウの形で決まる：横長なら横レイアウト
+   （U=25.6、パドルとブロックの距離を離して操作の余裕を作る）、
+   縦長なら縦レイアウト（U=12.8）。プレイ中のリサイズにも追従し、
+   切り替わるときは状態（ブロックの残り・ボール位置・スコア）を引き継ぐ。
    ============================================================ */
 
-// ---------- 表示モード ----------
-const isSmartphone = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches
-  && Math.min(screen.width, screen.height) <= 620);
-const LANDSCAPE = !isSmartphone; // タブレットは PC 準拠
-document.body.classList.add(LANDSCAPE ? 'landscape' : 'portrait');
-
-// ---------- フィールド（モード別にゲーム内座標を決める） ----------
-const FIELD = LANDSCAPE ? { U: 25.6, V: 15.2 } : { U: 12.8, V: 16.6 };
-const SPEED_MUL = LANDSCAPE ? 1.25 : 1; // 距離が伸びるぶん速度も少し上げる（到達時間はそれでも約1.6倍）
-const PADDLE_U = 1.0, PADDLE_LEN = 2.9, PADDLE_THICK = 0.36;
-const BALL_R = 0.30;
+// ---------- レイアウト定数 ----------
 const COLS = 8, ROWS = 4;
 const BLOCK_SU = 0.74, GAP_U = 0.18, GAP_V = 0.15;
-const BLOCK_SV = Math.min(1.7, (FIELD.V - 1.2 - (COLS - 1) * GAP_V) / COLS);
-const SPAN_V = COLS * BLOCK_SV + (COLS - 1) * GAP_V;
+const PADDLE_U = 1.0, PADDLE_LEN = 2.9, PADDLE_THICK = 0.36;
+const BALL_R = 0.30;
 const ROW_POINTS = [50, 40, 30, 20];
+
+// ---------- 表示モード（ウィンドウのアスペクト比で決まる） ----------
+let LANDSCAPE = (innerWidth / innerHeight) >= 1.0;
+let FIELD = { U: 12.8, V: 16.6 }, SPEED_MUL = 1, BLOCK_SV = 1.7, SPAN_V = 0, VIEW = { w: 0, h: 0 };
+function computeLayout() {
+  FIELD = LANDSCAPE ? { U: 25.6, V: 15.2 } : { U: 12.8, V: 16.6 };
+  SPEED_MUL = LANDSCAPE ? 1.25 : 1;
+  BLOCK_SV = Math.min(1.7, (FIELD.V - 1.2 - (COLS - 1) * GAP_V) / COLS);
+  SPAN_V = COLS * BLOCK_SV + (COLS - 1) * GAP_V;
+  VIEW = LANDSCAPE ? { w: FIELD.U + 1.6, h: FIELD.V + 1.6 } : { w: FIELD.V + 1.6, h: FIELD.U + 1.6 };
+}
+computeLayout();
+document.body.classList.add(LANDSCAPE ? 'landscape' : 'portrait');
 
 // (u, v) → three.js のワールド座標（z は呼び出し側で指定）
 function toWorld(u, v) {
   return LANDSCAPE ? { x: u - FIELD.U / 2, y: v } : { x: v, y: u - FIELD.U / 2 };
 }
-// u方向の大きさ su、v方向の大きさ sv を持つ箱を作る（モードで x/y が入れ替わる）
 function makeUVBox(su, sv, sz, mat) {
   const geo = LANDSCAPE ? new THREE.BoxGeometry(su, sv, sz) : new THREE.BoxGeometry(sv, su, sz);
   return new THREE.Mesh(geo, mat);
@@ -195,20 +197,26 @@ function placeUV(obj, u, v, z) {
   const w = toWorld(u, v);
   obj.position.set(w.x, w.y, z);
 }
+function disposeObj(root) {
+  root.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => m.dispose());
+  });
+}
 
 // ---------- レイヤー定義 ----------
 const LAYER_DEFS = [
   {
     key: 'front', label: '手前', z: 1.15, renderOrder: 2,
     offsetU: 0.23, offsetV: -0.46, opacity: 0.58,
-    colors: [0xff5d8f, 0xff8f5d, 0xffb84d, 0xffe066], // 暖色
+    colors: [0xff5d8f, 0xff8f5d, 0xffb84d, 0xffe066],
     baseSpeed: 7.6, ballCore: 0xfff0f5, ballEmissive: 0xff7bab, lightColor: 0xff9fc4,
     seBase: 560,
   },
   {
     key: 'back', label: '奥', z: -1.35, renderOrder: 1,
     offsetU: -0.23, offsetV: 0.46, opacity: 0.50,
-    colors: [0x7a5cff, 0x4d9fff, 0x3fd2ff, 0x4fe3c1], // 寒色
+    colors: [0x7a5cff, 0x4d9fff, 0x3fd2ff, 0x4fe3c1],
     baseSpeed: 6.9, ballCore: 0xf0f9ff, ballEmissive: 0x6fc9ff, lightColor: 0x8fd8ff,
     seBase: 400,
   },
@@ -226,14 +234,12 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x0a0f2a, 17, 40);
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 120);
-// フィールド全体が画面に収まるよう、カメラ距離をアスペクト比から決める
-const VIEW = LANDSCAPE ? { w: FIELD.U + 1.6, h: FIELD.V + 1.6 } : { w: FIELD.V + 1.6, h: FIELD.U + 1.6 };
 function fitCamera() {
   const aspect = innerWidth / innerHeight;
   camera.aspect = aspect;
   const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
   const dist = Math.max(VIEW.h / 2, (VIEW.w / 2) / aspect) / t * 1.03;
-  scene.fog.near = dist * 0.9;  // フォグはカメラ距離に連動させる（スマホで遠くても真っ白にしない）
+  scene.fog.near = dist * 0.9;
   scene.fog.far = dist * 2.3;
   camera.position.set(0, 0, dist);
   camera.lookAt(0, 0, 0);
@@ -270,68 +276,7 @@ scene.add(backLight);
   })));
 }
 
-// ---------- 背面パネル ----------
-{
-  const panel = new THREE.Mesh(
-    new THREE.PlaneGeometry(VIEW.w + 1.5, VIEW.h + 1.5),
-    new THREE.MeshBasicMaterial({ color: 0x0d1440, transparent: true, opacity: 0.45, depthWrite: false })
-  );
-  panel.position.z = -3.2;
-  scene.add(panel);
-}
-
-// ---------- レイヤーごとの枠 ----------
-function buildFrame(z, colorHex, opacity, renderOrder) {
-  const mat = new THREE.MeshPhysicalMaterial({
-    color: colorHex, transparent: true, opacity,
-    roughness: 0.1, metalness: 0.1, clearcoat: 1, depthWrite: false
-  });
-  const mk = (su, sv, u, v) => {
-    const m = makeUVBox(su, sv, 0.22, mat);
-    m.renderOrder = renderOrder;
-    placeUV(m, u, v, z);
-    scene.add(m);
-  };
-  mk(FIELD.U + 0.8, 0.24, FIELD.U / 2, -(FIELD.V / 2 + 0.32)); // v- 側のレール
-  mk(FIELD.U + 0.8, 0.24, FIELD.U / 2, FIELD.V / 2 + 0.32);    // v+ 側のレール
-  mk(0.24, FIELD.V + 0.9, FIELD.U + 0.32, 0);                  // 奥の壁
-}
-buildFrame(LAYER_DEFS[1].z, 0x8fb8ff, 0.20, 1);
-buildFrame(LAYER_DEFS[0].z, 0xffc4d8, 0.28, 2);
-
-// ---------- 共通パドル ----------
-const paddle = new THREE.Group();
-{
-  const bar = makeUVBox(PADDLE_THICK, PADDLE_LEN, 3.5, new THREE.MeshPhysicalMaterial({
-    color: 0x66d9ff, transparent: true, opacity: 0.55,
-    roughness: 0.08, metalness: 0.15, clearcoat: 1,
-    emissive: 0x1166aa, emissiveIntensity: 0.4, depthWrite: false
-  }));
-  bar.renderOrder = 3;
-  paddle.add(bar);
-  const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(bar.geometry),
-    new THREE.LineBasicMaterial({ color: 0xe8fbff, transparent: true, opacity: 0.8 })
-  );
-  edges.renderOrder = 3;
-  bar.add(edges);
-  // 各レイヤーの z 位置に、対応する色の受け皿（+u 側の面）
-  for (const def of LAYER_DEFS) {
-    const pad = makeUVBox(0.09, PADDLE_LEN * 0.98, 0.62, new THREE.MeshPhysicalMaterial({
-      color: def.ballEmissive, transparent: true, opacity: 0.95,
-      emissive: def.ballEmissive, emissiveIntensity: 0.9, roughness: 0.2, depthWrite: false
-    }));
-    const off = PADDLE_THICK / 2 + 0.045;
-    if (LANDSCAPE) pad.position.set(off, 0, def.z + 0.1);
-    else pad.position.set(0, off, def.z + 0.1);
-    pad.renderOrder = 4;
-    paddle.add(pad);
-  }
-}
-placeUV(paddle, PADDLE_U, 0, -0.1);
-scene.add(paddle);
-
-// ---------- レイヤー（ブロック＋ボール） ----------
+// ---------- レイヤー（ブロック格納用グループ＋ボール） ----------
 const layers = LAYER_DEFS.map((def) => {
   const group = new THREE.Group();
   group.position.z = def.z;
@@ -339,9 +284,11 @@ const layers = LAYER_DEFS.map((def) => {
   return { def, group, blocks: [], ball: null };
 });
 
-function buildBlocks(layer) {
-  for (const b of layer.blocks) layer.group.remove(b.mesh);
+function buildBlocks(layer, preserve = false) {
+  const prevAlive = preserve ? layer.blocks.map((b) => b.alive) : null;
+  for (const b of layer.blocks) { layer.group.remove(b.mesh); disposeObj(b.mesh); }
   layer.blocks.length = 0;
+  let idx = 0;
   for (let r = 0; r < ROWS; r++) {
     const color = layer.def.colors[r % layer.def.colors.length];
     const geo = LANDSCAPE ? new THREE.BoxGeometry(BLOCK_SU, BLOCK_SV, 0.6)
@@ -363,8 +310,11 @@ function buildBlocks(layer) {
       const u = FIELD.U - 1.5 - r * (BLOCK_SU + GAP_U) + layer.def.offsetU;
       const v = -SPAN_V / 2 + BLOCK_SV / 2 + c * (BLOCK_SV + GAP_V) + layer.def.offsetV;
       placeUV(mesh, u, v, 0);
+      const alive = prevAlive ? prevAlive[idx] : true;
+      mesh.visible = alive;
       layer.group.add(mesh);
-      layer.blocks.push({ mesh, alive: true, row: r, u, v });
+      layer.blocks.push({ mesh, alive, row: r, u, v });
+      idx++;
     }
   }
 }
@@ -398,6 +348,109 @@ function createBall(layer) {
   };
 }
 for (const layer of layers) layer.ball = createBall(layer);
+
+// ---------- フィールド構築（レイアウトが変わるたびに作り直す） ----------
+let fieldGroup = null;
+let paddle = null;
+function buildField() {
+  if (fieldGroup) { scene.remove(fieldGroup); disposeObj(fieldGroup); }
+  fieldGroup = new THREE.Group();
+  scene.add(fieldGroup);
+
+  // 背面パネル
+  const panel = new THREE.Mesh(
+    new THREE.PlaneGeometry(VIEW.w + 1.5, VIEW.h + 1.5),
+    new THREE.MeshBasicMaterial({ color: 0x0d1440, transparent: true, opacity: 0.45, depthWrite: false })
+  );
+  panel.position.z = -3.2;
+  fieldGroup.add(panel);
+
+  // レイヤーごとの枠
+  const buildFrame = (z, colorHex, opacity, renderOrder) => {
+    const mat = new THREE.MeshPhysicalMaterial({
+      color: colorHex, transparent: true, opacity,
+      roughness: 0.1, metalness: 0.1, clearcoat: 1, depthWrite: false
+    });
+    const mk = (su, sv, u, v) => {
+      const m = makeUVBox(su, sv, 0.22, mat);
+      m.renderOrder = renderOrder;
+      placeUV(m, u, v, z);
+      fieldGroup.add(m);
+    };
+    mk(FIELD.U + 0.8, 0.24, FIELD.U / 2, -(FIELD.V / 2 + 0.32));
+    mk(FIELD.U + 0.8, 0.24, FIELD.U / 2, FIELD.V / 2 + 0.32);
+    mk(0.24, FIELD.V + 0.9, FIELD.U + 0.32, 0);
+  };
+  buildFrame(LAYER_DEFS[1].z, 0x8fb8ff, 0.20, 1);
+  buildFrame(LAYER_DEFS[0].z, 0xffc4d8, 0.28, 2);
+
+  // 共通パドル
+  paddle = new THREE.Group();
+  const bar = makeUVBox(PADDLE_THICK, PADDLE_LEN, 3.5, new THREE.MeshPhysicalMaterial({
+    color: 0x66d9ff, transparent: true, opacity: 0.55,
+    roughness: 0.08, metalness: 0.15, clearcoat: 1,
+    emissive: 0x1166aa, emissiveIntensity: 0.4, depthWrite: false
+  }));
+  bar.renderOrder = 3;
+  paddle.add(bar);
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(bar.geometry),
+    new THREE.LineBasicMaterial({ color: 0xe8fbff, transparent: true, opacity: 0.8 })
+  );
+  edges.renderOrder = 3;
+  bar.add(edges);
+  for (const def of LAYER_DEFS) {
+    const pad = makeUVBox(0.09, PADDLE_LEN * 0.98, 0.62, new THREE.MeshPhysicalMaterial({
+      color: def.ballEmissive, transparent: true, opacity: 0.95,
+      emissive: def.ballEmissive, emissiveIntensity: 0.9, roughness: 0.2, depthWrite: false
+    }));
+    const off = PADDLE_THICK / 2 + 0.045;
+    if (LANDSCAPE) pad.position.set(off, 0, def.z + 0.1);
+    else pad.position.set(0, off, def.z + 0.1);
+    pad.renderOrder = 4;
+    paddle.add(pad);
+  }
+  placeUV(paddle, PADDLE_U, paddleV, -0.1);
+  fieldGroup.add(paddle);
+
+  // ブロックは状態（残り）を引き継いで再配置
+  for (const layer of layers) buildBlocks(layer, true);
+}
+
+// ---------- レイアウト切り替え ----------
+function setHint() {
+  document.getElementById('hint').textContent = LANDSCAPE
+    ? 'マウス・↑↓・タッチでパドル移動 ／ スペース：一時停止 ／ R：リスタート'
+    : 'マウス・←→・タッチでパドル移動 ／ スペース：一時停止 ／ R：リスタート';
+}
+function switchMode(toLandscape) {
+  if (toLandscape === LANDSCAPE) return;
+  const oldU = FIELD.U, oldV = FIELD.V, oldMul = SPEED_MUL;
+  LANDSCAPE = toLandscape;
+  computeLayout();
+  const ru = FIELD.U / oldU, rv = FIELD.V / oldV;
+  paddleV *= rv;
+  paddleTargetV *= rv;
+  for (const layer of layers) {
+    const b = layer.ball;
+    b.u *= ru;
+    b.v *= rv;
+    b.speed *= SPEED_MUL / oldMul;
+    if (b.mode === 'play') {
+      const m = Math.hypot(b.vu, b.vv) || 1;
+      b.vu = b.vu / m * b.speed;
+      b.vv = b.vv / m * b.speed;
+      placeUV(b.mesh, b.u, b.v, b.layer.def.z);
+    } else {
+      parkBall(b);
+    }
+  }
+  buildField();
+  document.body.classList.toggle('landscape', LANDSCAPE);
+  document.body.classList.toggle('portrait', !LANDSCAPE);
+  setHint();
+  fitCamera();
+}
 
 // ---------- 破片パーティクル ----------
 const particles = [];
@@ -544,8 +597,8 @@ function clearLevel() {
 function startPlay() {
   hideOverlay();
   gameState = 'playing';
-  launchBall(layers[0].ball, 32);   // 手前は +v 寄り
-  launchBall(layers[1].ball, -32);  // 奥は -v 寄りへ散らす
+  launchBall(layers[0].ball, 32);
+  launchBall(layers[1].ball, -32);
   beep(660, 0.07, 'sine', 0.06);
 }
 el.oBtn.addEventListener('click', () => {
@@ -556,8 +609,6 @@ el.oBtn.addEventListener('click', () => {
 });
 
 // ---------- 入力 ----------
-// ポインタ位置 → パドルの目標 v。レイを z=0 平面に当て、
-// 縦レイアウトでは画面 x、横レイアウトでは画面 y が v に対応する。
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 const worldPlaneZ0 = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
@@ -596,14 +647,20 @@ addEventListener('keyup', (e) => {
   if (e.code === 'ArrowUp' || e.code === 'KeyW') keys.up = false;
   if (e.code === 'ArrowDown' || e.code === 'KeyS') keys.down = false;
 });
+// リサイズ：ドラッグ中はカメラのフィットだけ追従し、
+// 止まって 250ms 後にアスペクト比でレイアウトの切り替えを判定する
+let resizeTimer = null;
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
-  fitCamera(); // モードは端末で固定。サイズ変更ではカメラのフィットだけ追従する
+  fitCamera();
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const a = innerWidth / innerHeight;
+    if (a >= 1.05 && !LANDSCAPE) switchMode(true);
+    else if (a <= 0.95 && LANDSCAPE) switchMode(false);
+  }, 250);
 });
-// ヒント文言はレイアウトに合わせる
-document.getElementById('hint').textContent = LANDSCAPE
-  ? 'マウス・↑↓・タッチでパドル移動 ／ スペース：一時停止 ／ R：リスタート'
-  : 'マウス・←→・タッチでパドル移動 ／ スペース：一時停止 ／ R：リスタート';
+setHint();
 
 // ---------- 物理＆描画 ----------
 const clock = new THREE.Clock();
@@ -644,21 +701,17 @@ function stepBall(ball, dt) {
     ball.u += ball.vu * sdt;
     ball.v += ball.vv * sdt;
 
-    // v 方向の両端（壁）
     if (ball.v - BALL_R < -FIELD.V / 2) { ball.v = -FIELD.V / 2 + BALL_R; ball.vv = Math.abs(ball.vv); beep(300, 0.04); }
     if (ball.v + BALL_R > FIELD.V / 2) { ball.v = FIELD.V / 2 - BALL_R; ball.vv = -Math.abs(ball.vv); beep(300, 0.04); }
-    // 奥の壁
     if (ball.u + BALL_R > FIELD.U) { ball.u = FIELD.U - BALL_R; ball.vu = -Math.abs(ball.vu); beep(300, 0.04); }
-    // パドルより後ろ → ミス
     if (ball.u < -0.5) { loseBall(ball); break; }
 
-    // 共通パドルとの反射
     if (ball.vu < 0 &&
         ball.u - BALL_R <= PADDLE_U + PADDLE_THICK / 2 &&
         ball.u - BALL_R >= PADDLE_U - 1.0 &&
         Math.abs(ball.v - paddleV) <= halfLen + BALL_R * 0.6) {
       const ratio = THREE.MathUtils.clamp((ball.v - paddleV) / halfLen, -1, 1);
-      const ang = ratio * (Math.PI / 3); // 最大 ±60°
+      const ang = ratio * (Math.PI / 3);
       ball.speed = Math.min(ball.speed * 1.008 + 0.015, 16);
       ball.vu = Math.cos(ang) * ball.speed;
       ball.vv = Math.sin(ang) * ball.speed;
@@ -666,7 +719,6 @@ function stepBall(ball, dt) {
       beep(ball.layer.def.seBase - 120, 0.05, 'sine', 0.055);
     }
 
-    // 自分のレイヤーのブロックだけと衝突
     for (const b of ball.layer.blocks) {
       if (!b.alive) continue;
       const du = ball.u - b.u, dv = ball.v - b.v;
@@ -692,7 +744,6 @@ function stepBall(ball, dt) {
   }
   placeUV(ball.mesh, ball.u, ball.v, ball.layer.def.z);
 
-  // 残像
   ball.trailT += dt;
   if (ball.trailT > 0.016) {
     ball.trailT = 0;
@@ -720,7 +771,6 @@ function animate() {
     for (const layer of layers) parkBall(layer.ball);
   }
   updateParticles(dt);
-  // ブロックの呼吸（明滅）— 奥は弱めにして奥行きを出す
   const t = performance.now() * 0.001;
   for (const layer of layers) {
     const amp = layer.def.key === 'front' ? 0.07 : 0.045;
@@ -730,6 +780,7 @@ function animate() {
   }
   renderer.render(scene, camera);
 }
+buildField();
 resetGame(1);
 gameState = 'title';
 animate();
