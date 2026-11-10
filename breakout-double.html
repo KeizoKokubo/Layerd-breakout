@@ -64,6 +64,8 @@
   .dot.back  { background: linear-gradient(135deg, #7a5cff, #3fd2ff); }
   .legend-box b { font-variant-numeric: tabular-nums; }
 
+  body.landscape #legend { left: auto; right: 20px; bottom: 40px; }
+
   /* ---------- Overlay ---------- */
   #overlay {
     position: fixed; inset: 0; z-index: 10;
@@ -190,16 +192,44 @@ const LAYER_DEFS = [
 let gameState = 'title'; // title | playing | paused | over | clear
 let score = 0, lives = 3, level = 1;
 let paddleTargetX = 0;
-const keys = { left: false, right: false };
+const keys = { left: false, right: false, up: false, down: false };
 
 // ---------- シーン ----------
 const container = document.getElementById('app');
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x0a0f2a, 17, 36); // 奥レイヤーをわずかに遠く感じさせる
 
+// ---------- 表示モード ----------
+// 端末で決める（スマホ=縦レイアウト / PC・タブレット=横レイアウト）。
+// リサイズでは切り替えないので、PCで途中にウィンドウサイズを変えても
+// レイアウトは変わらず、カメラのフィットだけが追従する。
+const isSmartphone = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches
+  && Math.min(screen.width, screen.height) <= 620);
+const LANDSCAPE = !isSmartphone; // タブレットは PC 準拠で横レイアウト
+document.body.classList.add(LANDSCAPE ? 'landscape' : 'portrait');
+// ゲームの論理座標は一切変えず、ワールド全体を表示だけ回転させる。
+// 横レイアウト = 時計回り90°（ブロックが右、パドルが左に来る）。
+const worldGroup = new THREE.Group();
+worldGroup.rotation.z = LANDSCAPE ? -Math.PI / 2 : 0;
+scene.add(worldGroup);
+
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
 camera.position.set(0, 1.3, 15.8);
-camera.lookAt(0, 0, 0);
+// 画面にフィールド全体が収まるよう、カメラ距離をアスペクト比から決める。
+// 縦長のスマホ画面でもブロックが全部収まるのはこの計算のおかげ。
+const VIEW = { w: 17.6, h: 14.0 }; // 枠を含む見せたい範囲（縦レイアウト基準）
+function fitCamera() {
+  const aspect = innerWidth / innerHeight;
+  camera.aspect = aspect;
+  const effW = LANDSCAPE ? VIEW.h : VIEW.w; // 横レイアウトでは縦横が入れ替わる
+  const effH = LANDSCAPE ? VIEW.w : VIEW.h;
+  const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const dist = Math.max(effH / 2, (effW / 2) / aspect) / t * 1.04;
+  camera.position.set(0, LANDSCAPE ? 0 : 1.2, dist);
+  camera.lookAt(0, 0, 0);
+  camera.updateProjectionMatrix();
+}
+fitCamera();
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -237,7 +267,7 @@ scene.add(backLight);
     new THREE.MeshBasicMaterial({ color: 0x0d1440, transparent: true, opacity: 0.45, depthWrite: false })
   );
   panel.position.z = -3.2;
-  scene.add(panel);
+  worldGroup.add(panel);
 }
 
 // ---------- レイヤーごとの枠（見た目） ----------
@@ -257,7 +287,7 @@ function buildFrame(z, colorHex, opacity, renderOrder) {
   mk(0.2, 12.8, FIELD.right + 0.3, -0.2);
   mk(16.8, 0.2, 0, FIELD.top + 0.3);
   grp.position.z = z;
-  scene.add(grp);
+  worldGroup.add(grp);
 }
 buildFrame(LAYER_DEFS[1].z, 0x8fb8ff, 0.20, 1); // 奥の枠
 buildFrame(LAYER_DEFS[0].z, 0xffc4d8, 0.28, 2); // 手前の枠
@@ -296,13 +326,13 @@ const paddle = new THREE.Group();
   }
 }
 paddle.position.set(0, PADDLE_Y, -0.1);
-scene.add(paddle);
+worldGroup.add(paddle);
 
 // ---------- レイヤー（ブロック＋ボール）の構築 ----------
 const layers = LAYER_DEFS.map((def) => {
   const group = new THREE.Group();
   group.position.z = def.z;
-  scene.add(group);
+  worldGroup.add(group);
   return { def, group, blocks: [], ball: null };
 });
 
@@ -348,7 +378,7 @@ function createBall(layer) {
   grp.add(core);
   grp.add(new THREE.PointLight(def.lightColor, 26, 11, 1.8));
   grp.position.set(0, PADDLE_Y + PADDLE_H / 2 + BALL_R + 0.02, def.z);
-  scene.add(grp);
+  worldGroup.add(grp);
 
   // 残像
   const trail = [];
@@ -358,7 +388,7 @@ function createBall(layer) {
       color: def.ballEmissive, transparent: true, opacity: 0, depthWrite: false
     }));
     m.position.z = def.z;
-    scene.add(m);
+    worldGroup.add(m);
     trail.push(m);
   }
   return {
@@ -377,7 +407,7 @@ const particles = [];
   for (let i = 0; i < 160; i++) {
     const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
     mesh.visible = false;
-    scene.add(mesh);
+    worldGroup.add(mesh);
     particles.push({ mesh, vel: new THREE.Vector3(), life: 0, maxLife: 0 });
   }
 }
@@ -519,29 +549,33 @@ el.oBtn.addEventListener('click', () => {
 });
 
 // ---------- 入力 ----------
-function screenXToWorldX(clientX) {
-  const v = new THREE.Vector3(-1, 0, 0.5).unproject(camera);
-  const rayL = v.clone().sub(camera.position).normalize();
-  const tL = -camera.position.z / rayL.z;
-  const leftX = camera.position.x + rayL.x * tL;
-  const v2 = new THREE.Vector3(1, 0, 0.5).unproject(camera);
-  const rayR = v2.clone().sub(camera.position).normalize();
-  const tR = -camera.position.z / rayR.z;
-  const rightX = camera.position.x + rayR.x * tR;
-  return leftX + (rightX - leftX) * (clientX / innerWidth);
+// ポインタ位置→パドルの目標位置：レイを z=0 平面に当て、worldGroup の
+// ローカル座標に戻す。パドルは常にローカル X 軸上を動くので、
+// 縦・横どちらのレイアウトでも同じ計算でよい（回転は group が吸収する）。
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const worldPlaneZ0 = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+function pointerToPaddleX(clientX, clientY) {
+  ndc.set((clientX / innerWidth) * 2 - 1, -((clientY / innerHeight) * 2 - 1));
+  raycaster.setFromCamera(ndc, camera);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(worldPlaneZ0, hit)) return null;
+  return worldGroup.worldToLocal(hit).x;
 }
 addEventListener('pointermove', (e) => {
-  const x = screenXToWorldX(e.clientX);
-  if (isFinite(x)) paddleTargetX = x;
+  const x = pointerToPaddleX(e.clientX, e.clientY);
+  if (x !== null && isFinite(x)) paddleTargetX = x;
 });
 addEventListener('pointerdown', (e) => {
   if (e.target.closest('#overlay, #sound-btn')) return;
-  const x = screenXToWorldX(e.clientX);
-  if (isFinite(x)) paddleTargetX = x;
+  const x = pointerToPaddleX(e.clientX, e.clientY);
+  if (x !== null && isFinite(x)) paddleTargetX = x;
 });
 addEventListener('keydown', (e) => {
   if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
   if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
+  if (e.code === 'ArrowUp' || e.code === 'KeyW') { keys.up = true; e.preventDefault(); }
+  if (e.code === 'ArrowDown' || e.code === 'KeyS') { keys.down = true; e.preventDefault(); }
   if (e.code === 'Space') {
     e.preventDefault();
     if (gameState === 'playing') { gameState = 'paused'; showOverlay('PAUSED', '一時停止中。', '▶ 再開する'); }
@@ -553,20 +587,33 @@ addEventListener('keydown', (e) => {
 addEventListener('keyup', (e) => {
   if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
   if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
+  if (e.code === 'ArrowUp' || e.code === 'KeyW') keys.up = false;
+  if (e.code === 'ArrowDown' || e.code === 'KeyS') keys.down = false;
 });
 addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  fitCamera(); // モードは端末で固定。サイズ変更ではカメラのフィットだけ追従する
 });
+// ヒント文言はレイアウトに合わせる
+document.getElementById('hint').textContent = LANDSCAPE
+  ? 'マウス・↑↓・タッチでパドル移動 ／ スペース：一時停止 ／ R：リスタート'
+  : 'マウス・←→・タッチでパドル移動 ／ スペース：一時停止 ／ R：リスタート';
+
 
 // ---------- 物理＆描画 ----------
 const clock = new THREE.Clock();
 
 function stepPaddle(dt) {
   const KEY_SPEED = 13;
-  if (keys.left) paddleTargetX -= KEY_SPEED * dt;
-  if (keys.right) paddleTargetX += KEY_SPEED * dt;
+  if (!LANDSCAPE) {
+    if (keys.left) paddleTargetX -= KEY_SPEED * dt;
+    if (keys.right) paddleTargetX += KEY_SPEED * dt;
+  } else {
+    // 横レイアウトではパドルは画面の上下へ動く。
+    // 画面の上方向はローカル座標では targetX が減る向き（回転の符号に注意）。
+    if (keys.up) paddleTargetX -= KEY_SPEED * dt;
+    if (keys.down) paddleTargetX += KEY_SPEED * dt;
+  }
   const halfP = PADDLE_W / 2;
   paddleTargetX = THREE.MathUtils.clamp(paddleTargetX, FIELD.left + halfP, FIELD.right - halfP);
   paddle.position.x += (paddleTargetX - paddle.position.x) * Math.min(1, dt * 18);
@@ -665,9 +712,11 @@ function animate() {
     for (const layer of layers) parkBall(layer.ball);
   }
   updateParticles(dt);
-  // カメラのほんの少しの追従
-  camera.position.x += ((paddle.position.x * 0.06) - camera.position.x) * Math.min(1, dt * 3);
-  camera.lookAt(camera.position.x * 0.6, 0, 0);
+  // カメラのほんの少しの追従（縦レイアウトのみ）
+  if (!LANDSCAPE) {
+    camera.position.x += ((paddle.position.x * 0.06) - camera.position.x) * Math.min(1, dt * 3);
+    camera.lookAt(camera.position.x * 0.6, 0, 0);
+  }
   // ブロックの呼吸（明滅）— 奥は弱めにして奥行きを出す
   const t = performance.now() * 0.001;
   for (const layer of layers) {
