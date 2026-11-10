@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Glass Breakout — three.js ブロック崩し</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    background:
+      radial-gradient(1200px 700px at 20% -10%, #2b3a67 0%, transparent 60%),
+      radial-gradient(1000px 800px at 90% 110%, #4a235a 0%, transparent 55%),
+      linear-gradient(160deg, #070b1d 0%, #101736 55%, #1b1040 100%);
+    color: #eef2ff;
+    -webkit-user-select: none; user-select: none;
+    touch-action: none;
+  }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* ---------- HUD ---------- */
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 20px; pointer-events: none; z-index: 5;
+  }
+  .hud-box {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 12px; padding: 8px 16px;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    font-size: 15px; letter-spacing: .04em; min-width: 118px; text-align: center;
+  }
+  .hud-box .label { font-size: 10px; opacity: .65; display: block; letter-spacing: .18em; }
+  .hud-box .value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  #lives .value { color: #ff8fab; letter-spacing: .1em; font-size: 17px; }
+  #title-badge {
+    font-weight: 800; font-size: 17px; letter-spacing: .12em;
+    text-shadow: 0 0 18px rgba(120,180,255,.8);
+  }
+  #sound-btn {
+    pointer-events: auto; cursor: pointer; border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.08); color: #eef2ff; border-radius: 12px;
+    padding: 10px 14px; font-size: 15px; backdrop-filter: blur(8px);
+  }
+  #sound-btn:hover { background: rgba(255,255,255,0.16); }
+
+  /* ---------- Overlay ---------- */
+  #overlay {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(5, 8, 24, 0.45);
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+    transition: opacity .25s ease;
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  .card {
+    text-align: center; padding: 38px 48px; border-radius: 22px;
+    background: rgba(255,255,255,0.09);
+    border: 1px solid rgba(255,255,255,0.22);
+    box-shadow: 0 24px 60px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.25);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    max-width: min(520px, 90vw);
+  }
+  .card h1 {
+    font-size: clamp(26px, 5vw, 40px); letter-spacing: .06em; margin-bottom: 10px;
+    background: linear-gradient(90deg, #8fd3ff, #c39bff, #ff9ecb);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .card p { font-size: 15px; line-height: 1.8; opacity: .9; margin-bottom: 22px; white-space: pre-line; }
+  #start-btn {
+    cursor: pointer; border: none; border-radius: 999px;
+    padding: 13px 42px; font-size: 17px; font-weight: 700; letter-spacing: .08em;
+    color: #0b1030; background: linear-gradient(90deg, #8fd3ff, #c39bff);
+    box-shadow: 0 8px 28px rgba(140,170,255,.45);
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  #start-btn:hover { transform: translateY(-2px) scale(1.03); box-shadow: 0 12px 34px rgba(140,170,255,.6); }
+  #start-btn:active { transform: scale(.97); }
+
+  #hint {
+    position: fixed; bottom: 12px; left: 0; right: 0; z-index: 5;
+    text-align: center; font-size: 12.5px; opacity: .65; pointer-events: none; letter-spacing: .05em;
+  }
+  @media (max-width: 640px) {
+    .hud-box { min-width: 84px; padding: 6px 10px; }
+    .hud-box .value { font-size: 16px; }
+    #title-badge { display: none; }
+    .card { padding: 28px 24px; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud">
+  <div class="hud-box"><span class="label">SCORE</span><span class="value" id="score">0</span></div>
+  <div id="title-badge">✦ GLASS BREAKOUT ✦</div>
+  <div style="display:flex; gap:10px; align-items:stretch;">
+    <div class="hud-box"><span class="label">LEVEL</span><span class="value" id="level">1</span></div>
+    <div class="hud-box" id="lives"><span class="label">BALL</span><span class="value" id="lives-value">●●●</span></div>
+    <button id="sound-btn" title="サウンド ON/OFF">🔊</button>
+  </div>
+</div>
+
+<div id="overlay">
+  <div class="card">
+    <h1 id="overlay-title">GLASS BREAKOUT</h1>
+    <p id="overlay-text">半透明のガラスブロックを全部壊そう。
+パドルは マウス / ←→キー / タッチ で動くよ。
+クリックかスペースでボール発射！</p>
+    <button id="start-btn">▶ スタート</button>
+  </div>
+</div>
+
+<div id="hint">マウス・←→・タッチで移動 ／ スペース：発射・一時停止 ／ R：リスタート</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ============================================================
+   Glass Breakout — three.js ブロック崩し
+   ・描画は three.js（半透明マテリアル＋輪郭線でガラス感）
+   ・物理は XY 平面上の簡易 2D 判定（玉・壁・パドル・ブロック）
+   ============================================================ */
+
+// ---------- 基本定数 ----------
+const FIELD = { left: -8, right: 8, top: 6, bottom: -6.4 };
+const PADDLE_Y = -5.3;
+const PADDLE_W = 2.9, PADDLE_H = 0.36;
+const BALL_R = 0.30;
+const BLOCK_COLS = 9, BLOCK_ROWS = 5;
+const BLOCK_W = 1.60, BLOCK_H = 0.72, GAP_X = 0.13, GAP_Y = 0.20;
+const BLOCK_TOP_Y = 4.55;
+
+// 行ごとの色（上から下へ、虹色グラデーション）
+const ROW_COLORS = [0xff5d8f, 0xffa94d, 0xffe066, 0x69db7c, 0x4dd0e1];
+const ROW_POINTS = [50, 40, 30, 20, 10]; // 上の行ほど高得点
+
+// ---------- 状態 ----------
+let state = 'ready';        // ready | playing | paused | over | clear
+let score = 0, lives = 3, level = 1;
+let ballSpeed = 7.2;
+const vel = new THREE.Vector2(0, 0); // ボール速度ベクトル（大きさ = ballSpeed）
+let paddleTargetX = 0;
+let keys = { left: false, right: false };
+
+// ---------- シーン ----------
+const container = document.getElementById('app');
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x0a0f2a, 0.012);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 1.2, 15.5);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+container.appendChild(renderer.domElement);
+
+// ---------- ライト ----------
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.6);
+dirLight.position.set(6, 10, 8);
+scene.add(dirLight);
+const backLight = new THREE.DirectionalLight(0x7aa2ff, 0.7);
+backLight.position.set(-8, -4, 6);
+scene.add(backLight);
+
+// ---------- 背景の星屑 ----------
+{
+  const N = 260, pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    pos[i * 3] = (Math.random() - 0.5) * 44;
+    pos[i * 3 + 1] = (Math.random() - 0.5) * 28;
+    pos[i * 3 + 2] = -6 - Math.random() * 10;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const m = new THREE.PointsMaterial({ color: 0xaac4ff, size: 0.09, transparent: true, opacity: 0.75 });
+  scene.add(new THREE.Points(g, m));
+}
+
+// ---------- プレイフィールド背面パネル＋枠 ----------
+{
+  const panel = new THREE.Mesh(
+    new THREE.PlaneGeometry(17.4, 13.6),
+    new THREE.MeshBasicMaterial({ color: 0x0d1440, transparent: true, opacity: 0.45 })
+  );
+  panel.position.z = -0.9;
+  scene.add(panel);
+
+  const frameMat = new THREE.MeshPhysicalMaterial({
+    color: 0xbfe3ff, transparent: true, opacity: 0.35,
+    roughness: 0.1, metalness: 0.1, clearcoat: 1
+  });
+  const mkWall = (w, h, x, y) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.5), frameMat);
+    mesh.position.set(x, y, 0);
+    scene.add(mesh);
+  };
+  mkWall(0.28, 13.0, FIELD.left - 0.35, -0.2);   // 左壁（見た目）
+  mkWall(0.28, 13.0, FIELD.right + 0.35, -0.2);  // 右壁
+  mkWall(17.0, 0.28, 0, FIELD.top + 0.35);       // 天井
+}
+
+// ---------- パドル ----------
+const paddle = new THREE.Group();
+{
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(PADDLE_W, PADDLE_H, 0.55),
+    new THREE.MeshPhysicalMaterial({
+      color: 0x66d9ff, transparent: true, opacity: 0.85,
+      roughness: 0.08, metalness: 0.15, clearcoat: 1,
+      emissive: 0x1166aa, emissiveIntensity: 0.55
+    })
+  );
+  paddle.add(body);
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(body.geometry),
+    new THREE.LineBasicMaterial({ color: 0xe8fbff, transparent: true, opacity: 0.95 })
+  );
+  paddle.add(edges);
+}
+paddle.position.set(0, PADDLE_Y, 0);
+scene.add(paddle);
+
+// ---------- ボール ----------
+const ball = new THREE.Group();
+{
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(BALL_R, 32, 32),
+    new THREE.MeshPhysicalMaterial({
+      color: 0xffffff, emissive: 0xbfd9ff, emissiveIntensity: 1.4,
+      roughness: 0.15, metalness: 0, clearcoat: 1
+    })
+  );
+  ball.add(core);
+  const glow = new THREE.PointLight(0x9fc8ff, 26, 11, 1.8);
+  ball.add(glow);
+}
+ball.position.set(0, PADDLE_Y + PADDLE_H / 2 + BALL_R + 0.02, 0);
+scene.add(ball);
+// ボールの残像（簡易トレイル）
+const trail = [];
+{
+  const geo = new THREE.SphereGeometry(BALL_R, 16, 16);
+  for (let i = 0; i < 10; i++) {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: 0x8fc4ff, transparent: true, opacity: 0
+    }));
+    scene.add(m); trail.push(m);
+  }
+}
+
+// ---------- ブロック ----------
+const blocks = []; // { mesh, alive, row }
+const blockGroup = new THREE.Group();
+scene.add(blockGroup);
+
+function buildBlocks() {
+  // 既存を片付ける
+  for (const b of blocks) { blockGroup.remove(b.mesh); b.mesh.geometry.dispose(); }
+  blocks.length = 0;
+
+  const totalW = BLOCK_COLS * BLOCK_W + (BLOCK_COLS - 1) * GAP_X;
+  const startX = -totalW / 2 + BLOCK_W / 2;
+
+  for (let r = 0; r < BLOCK_ROWS; r++) {
+    const color = ROW_COLORS[r % ROW_COLORS.length];
+    const geo = new THREE.BoxGeometry(BLOCK_W, BLOCK_H, 0.65);
+    for (let c = 0; c < BLOCK_COLS; c++) {
+      const mat = new THREE.MeshPhysicalMaterial({
+        color, transparent: true, opacity: 0.62,
+        roughness: 0.12, metalness: 0.05, clearcoat: 1,
+        emissive: color, emissiveIntensity: 0.18
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      const edge = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geo),
+        new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 })
+      );
+      mesh.add(edge);
+      mesh.position.set(
+        startX + c * (BLOCK_W + GAP_X),
+        BLOCK_TOP_Y - r * (BLOCK_H + GAP_Y),
+        0
+      );
+      blockGroup.add(mesh);
+      blocks.push({ mesh, alive: true, row: r });
+    }
+  }
+}
+buildBlocks();
+
+// ---------- 破片パーティクル（プール方式） ----------
+const PARTICLE_MAX = 140;
+const particles = [];
+{
+  const geo = new THREE.BoxGeometry(0.13, 0.13, 0.13);
+  for (let i = 0; i < PARTICLE_MAX; i++) {
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }));
+    mesh.visible = false;
+    scene.add(mesh);
+    particles.push({ mesh, vel: new THREE.Vector3(), life: 0, maxLife: 0 });
+  }
+}
+function burst(x, y, colorHex) {
+  let spawned = 0;
+  for (const p of particles) {
+    if (p.life > 0) continue;
+    p.mesh.visible = true;
+    p.mesh.material.color.setHex(colorHex);
+    p.mesh.position.set(x, y, 0.2);
+    const a = Math.random() * Math.PI * 2, sp = 1.6 + Math.random() * 3.4;
+    p.vel.set(Math.cos(a) * sp, Math.sin(a) * sp, (Math.random() - 0.5) * 2.2);
+    p.maxLife = p.life = 0.45 + Math.random() * 0.35;
+    p.mesh.rotation.set(Math.random() * 3, Math.random() * 3, 0);
+    if (++spawned >= 10) break;
+  }
+}
+function updateParticles(dt) {
+  for (const p of particles) {
+    if (p.life <= 0) continue;
+    p.life -= dt;
+    if (p.life <= 0) { p.mesh.visible = false; p.mesh.material.opacity = 0; continue; }
+    p.vel.y -= 4.5 * dt; // ちょい重力
+    p.mesh.position.addScaledVector(p.vel, dt);
+    p.mesh.rotation.x += dt * 7; p.mesh.rotation.y += dt * 9;
+    const t = p.life / p.maxLife;
+    p.mesh.material.opacity = 0.9 * t;
+    p.mesh.scale.setScalar(0.4 + 0.6 * t);
+  }
+}
+
+// ---------- サウンド（WebAudioの短いビープ） ----------
+let audioCtx = null, soundOn = true;
+function beep(freq, dur = 0.06, type = 'square', vol = 0.05) {
+  if (!soundOn) return;
+  try {
+    audioCtx ??= new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + dur);
+  } catch { /* 音が出ない環境では黙って続行 */ }
+}
+document.getElementById('sound-btn').addEventListener('click', (e) => {
+  soundOn = !soundOn;
+  e.currentTarget.textContent = soundOn ? '🔊' : '🔇';
+});
+
+// ---------- HUD / オーバーレイ ----------
+const el = {
+  score: document.getElementById('score'),
+  level: document.getElementById('level'),
+  lives: document.getElementById('lives-value'),
+  overlay: document.getElementById('overlay'),
+  oTitle: document.getElementById('overlay-title'),
+  oText: document.getElementById('overlay-text'),
+  oBtn: document.getElementById('start-btn'),
+};
+function refreshHUD() {
+  el.score.textContent = score;
+  el.level.textContent = level;
+  el.lives.textContent = '●'.repeat(Math.max(lives, 0)) + '○'.repeat(Math.max(3 - lives, 0));
+}
+function showOverlay(title, text, btn) {
+  el.oTitle.textContent = title;
+  el.oText.textContent = text;
+  el.oBtn.textContent = btn;
+  el.overlay.classList.remove('hidden');
+}
+function hideOverlay() { el.overlay.classList.add('hidden'); }
+
+// ---------- ゲーム進行 ----------
+function resetBall() {
+  state = 'ready';
+  vel.set(0, 0);
+  ball.position.set(paddle.position.x, PADDLE_Y + PADDLE_H / 2 + BALL_R + 0.02, 0);
+}
+function launchBall() {
+  if (state !== 'ready') return;
+  state = 'playing';
+  const ang = (55 + Math.random() * 20) * Math.PI / 180; // 上向き 55〜75°
+  const dirX = (Math.random() < 0.5 ? -1 : 1) * Math.cos(ang);
+  vel.set(dirX, Math.sin(ang)).normalize().multiplyScalar(ballSpeed);
+  beep(660, 0.07, 'sine', 0.06);
+}
+function resetGame(newLevel = 1) {
+  level = newLevel;
+  if (newLevel === 1) { score = 0; lives = 3; }
+  ballSpeed = 7.2 + (level - 1) * 0.9;
+  paddle.position.x = 0; paddleTargetX = 0;
+  buildBlocks();
+  resetBall();
+  refreshHUD();
+}
+function loseBall() {
+  lives--;
+  refreshHUD();
+  beep(160, 0.25, 'sawtooth', 0.06);
+  if (lives <= 0) {
+    state = 'over';
+    showOverlay('GAME OVER', `スコアは ${score} 点だったよ。\nもう一度挑戦してみよう！`, '↻ もう一度');
+  } else {
+    resetBall();
+  }
+}
+function clearLevel() {
+  state = 'clear';
+  score += 500; // クリアボーナス
+  refreshHUD();
+  beep(523, 0.1, 'sine', 0.06);
+  setTimeout(() => beep(784, 0.14, 'sine', 0.06), 110);
+  showOverlay('LEVEL CLEAR! 🎉', `ボーナス +500点！ スコア ${score} 点。\n次のレベルはボールの速度が上がるよ。`, `▶ レベル ${level + 1} へ`);
+}
+
+el.oBtn.addEventListener('click', () => {
+  if (state === 'over' || state === 'clear' || state === 'ready' && score === 0 && lives === 3) {
+    if (state === 'clear') resetGame(level + 1);
+    else if (state === 'over') resetGame(1);
+    hideOverlay();
+    launchBall();
+  } else if (state === 'paused') {
+    state = 'playing';
+    hideOverlay();
+  }
+});
+
+// ---------- 入力 ----------
+// 画面 x → ワールド x の変換：視錐台の左右端が z=0 平面でどの x に対応するかを
+// カメラから求め、その間を線形補間する（パドルの追従には十分な精度）。
+function screenXToWorldX(clientX) {
+  // カメラの視錐台から、z=0 平面上で画面端がどの x に対応するかを求めて線形補間
+  const v = new THREE.Vector3(-1, 0, 0.5).unproject(camera);
+  const rayL = v.clone().sub(camera.position).normalize();
+  const tL = -camera.position.z / rayL.z;
+  const leftX = camera.position.x + rayL.x * tL;
+  const v2 = new THREE.Vector3(1, 0, 0.5).unproject(camera);
+  const rayR = v2.clone().sub(camera.position).normalize();
+  const tR = -camera.position.z / rayR.z;
+  const rightX = camera.position.x + rayR.x * tR;
+  return leftX + (rightX - leftX) * (clientX / innerWidth);
+}
+addEventListener('pointermove', (e) => {
+  const x = screenXToWorldX(e.clientX);
+  if (x !== null && isFinite(x)) paddleTargetX = x;
+});
+addEventListener('pointerdown', (e) => {
+  if (e.target.closest('#overlay, #sound-btn')) return;
+  const x = screenXToWorldX(e.clientX);
+  if (x !== null && isFinite(x)) paddleTargetX = x;
+  if (state === 'ready') launchBall();
+  else if (state === 'paused') { state = 'playing'; hideOverlay(); }
+});
+addEventListener('keydown', (e) => {
+  if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
+  if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (state === 'ready') launchBall();
+    else if (state === 'playing') { state = 'paused'; showOverlay('PAUSED', '一時停止中。', '▶ 再開する'); }
+    else if (state === 'paused') { state = 'playing'; hideOverlay(); }
+  }
+  if (e.code === 'KeyR' && (state === 'over' || state === 'clear' || state === 'playing' || state === 'paused')) {
+    resetGame(1); hideOverlay(); launchBall();
+  }
+});
+addEventListener('keyup', (e) => {
+  if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
+  if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
+});
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- 物理＆描画ループ ----------
+const clock = new THREE.Clock();
+const trailTimer = { t: 0 };
+
+function step(dt) {
+  // --- パドル移動（キー入力をターゲットへ反映し、滑らかに追従） ---
+  const KEY_SPEED = 13;
+  if (keys.left) paddleTargetX -= KEY_SPEED * dt;
+  if (keys.right) paddleTargetX += KEY_SPEED * dt;
+  const halfP = PADDLE_W / 2;
+  paddleTargetX = THREE.MathUtils.clamp(paddleTargetX, FIELD.left + halfP, FIELD.right - halfP);
+  paddle.position.x += (paddleTargetX - paddle.position.x) * Math.min(1, dt * 18);
+  paddle.rotation.z = THREE.MathUtils.clamp((paddleTargetX - paddle.position.x) * -0.03, -0.06, 0.06);
+
+  if (state === 'ready') {
+    ball.position.x = paddle.position.x;
+    ball.position.y = PADDLE_Y + PADDLE_H / 2 + BALL_R + 0.02;
+  }
+
+  if (state === 'playing') {
+    // サブステップで高速時のすり抜けを防ぐ
+    const steps = 3, sdt = dt / steps;
+    for (let s = 0; s < steps && state === 'playing'; s++) {
+      ball.position.x += vel.x * sdt;
+      ball.position.y += vel.y * sdt;
+      const bx = ball.position.x, by = ball.position.y;
+
+      // 左右の壁
+      if (bx - BALL_R < FIELD.left) { ball.position.x = FIELD.left + BALL_R; vel.x = Math.abs(vel.x); beep(300, 0.04); }
+      if (bx + BALL_R > FIELD.right) { ball.position.x = FIELD.right - BALL_R; vel.x = -Math.abs(vel.x); beep(300, 0.04); }
+      // 天井
+      if (by + BALL_R > FIELD.top) { ball.position.y = FIELD.top - BALL_R; vel.y = -Math.abs(vel.y); beep(300, 0.04); }
+      // 床 → ミス
+      if (by - BALL_R < FIELD.bottom) { loseBall(); break; }
+
+      // パドル
+      if (vel.y < 0 &&
+          by - BALL_R <= PADDLE_Y + PADDLE_H / 2 &&
+          by - BALL_R >= PADDLE_Y - PADDLE_H &&
+          Math.abs(bx - paddle.position.x) <= halfP + BALL_R * 0.6) {
+        const ratio = THREE.MathUtils.clamp((bx - paddle.position.x) / halfP, -1, 1);
+        const ang = ratio * (Math.PI / 3); // 最大 ±60°
+        const sp = Math.min(ballSpeed * 1.01, 13);
+        ballSpeed = sp;
+        vel.set(Math.sin(ang) * sp, Math.cos(ang) * sp);
+        ball.position.y = PADDLE_Y + PADDLE_H / 2 + BALL_R + 0.01;
+        beep(440, 0.05, 'sine', 0.06);
+      }
+
+      // ブロック
+      for (const b of blocks) {
+        if (!b.alive) continue;
+        const dx = bx - b.mesh.position.x, dy = by - b.mesh.position.y;
+        if (Math.abs(dx) < BLOCK_W / 2 + BALL_R && Math.abs(dy) < BLOCK_H / 2 + BALL_R) {
+          const overlapX = BLOCK_W / 2 + BALL_R - Math.abs(dx);
+          const overlapY = BLOCK_H / 2 + BALL_R - Math.abs(dy);
+          if (overlapX < overlapY) vel.x = dx > 0 ? Math.abs(vel.x) : -Math.abs(vel.x);
+          else vel.y = dy > 0 ? Math.abs(vel.y) : -Math.abs(vel.y);
+          // 速度の大きさを一定に保つ
+          vel.normalize().multiplyScalar(ballSpeed);
+          b.alive = false;
+          b.mesh.visible = false;
+          burst(b.mesh.position.x, b.mesh.position.y, ROW_COLORS[b.row % ROW_COLORS.length]);
+          score += ROW_POINTS[b.row % ROW_POINTS.length];
+          refreshHUD();
+          beep(520 + (BLOCK_ROWS - b.row) * 90, 0.06, 'square', 0.045);
+          if (blocks.every(x => !x.alive)) clearLevel();
+          break;
+        }
+      }
+    }
+  }
+
+  // --- 残像 ---
+  trailTimer.t += dt;
+  if (trailTimer.t > 0.016) {
+    trailTimer.t = 0;
+    for (let i = trail.length - 1; i > 0; i--) {
+      trail[i].position.copy(trail[i - 1].position);
+      trail[i].material.opacity = (state === 'playing') ? 0.16 * (1 - i / trail.length) : 0;
+      const s = 1 - i / (trail.length + 2);
+      trail[i].scale.setScalar(s);
+    }
+    trail[0].position.copy(ball.position);
+    trail[0].material.opacity = state === 'playing' ? 0.16 : 0;
+  }
+
+  // --- カメラのほんの少しの揺れ（パドルに追従） ---
+  camera.position.x += ((paddle.position.x * 0.12) - camera.position.x) * Math.min(1, dt * 3);
+  camera.lookAt(camera.position.x * 0.6, 0, 0);
+
+  updateParticles(dt);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.033);
+  if (state !== 'paused') step(dt);
+  // ブロックのほんのりした呼吸（明滅）でガラス感を出す
+  const t = performance.now() * 0.001;
+  blockGroup.children.forEach((m, i) => {
+    if (m.visible) m.material.emissiveIntensity = 0.15 + 0.07 * Math.sin(t * 1.6 + i * 0.35);
+  });
+  renderer.render(scene, camera);
+}
+refreshHUD();
+animate();
+</script>
+</body>
+</html>

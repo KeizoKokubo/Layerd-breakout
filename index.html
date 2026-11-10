@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Layerd Breakout — three.js ブロック崩し</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    min-height: 100vh; color: #eef2ff; padding: 48px 20px 40px;
+    background:
+      radial-gradient(1200px 700px at 20% -10%, #2b3a67 0%, transparent 60%),
+      radial-gradient(1000px 800px at 90% 110%, #4a235a 0%, transparent 55%),
+      linear-gradient(160deg, #070b1d 0%, #101736 55%, #1b1040 100%);
+  }
+  main { max-width: 880px; margin: 0 auto; }
+  h1 {
+    font-size: clamp(30px, 6vw, 46px); letter-spacing: .05em; text-align: center; margin-bottom: 10px;
+    background: linear-gradient(90deg, #ff9ecb, #ffc46b, #8fd3ff, #b49bff);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .lead { text-align: center; opacity: .85; line-height: 1.9; margin-bottom: 38px; font-size: 15px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 22px; }
+  a.card {
+    display: block; text-decoration: none; color: inherit; border-radius: 22px; padding: 30px 28px;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2);
+    box-shadow: 0 18px 44px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.22);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  a.card:hover { transform: translateY(-4px); box-shadow: 0 26px 54px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.25); }
+  .badge {
+    display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .12em;
+    padding: 4px 12px; border-radius: 999px; margin-bottom: 14px; color: #0b1030;
+  }
+  .badge.double { background: linear-gradient(90deg, #ffb3cd, #c3b0ff); }
+  .badge.single { background: linear-gradient(90deg, #8fd3ff, #a9e8c9); }
+  .card h2 { font-size: 22px; margin-bottom: 10px; letter-spacing: .03em; }
+  .card p { font-size: 14px; line-height: 1.85; opacity: .88; }
+  .swatches { display: flex; gap: 6px; margin: 16px 0 6px; }
+  .swatches span { height: 12px; flex: 1; border-radius: 6px; opacity: .75; }
+  .play { margin-top: 16px; font-weight: 700; letter-spacing: .06em; color: #a9d8ff; }
+  footer { text-align: center; margin-top: 42px; font-size: 13px; opacity: .65; line-height: 2; }
+</style>
+</head>
+<body>
+<main>
+  <h1>LAYERD BREAKOUT</h1>
+  <p class="lead">three.js で描く、半透明ガラスブロックのブロック崩し。<br>遊びたいバージョンを選んでね。</p>
+
+  <div class="cards">
+    <a class="card" href="breakout-double.html">
+      <span class="badge double">おすすめ・二層</span>
+      <h2>ダブルレイヤー版</h2>
+      <div class="swatches">
+        <span style="background:#ff5d8f"></span><span style="background:#ffb84d"></span>
+        <span style="background:#7a5cff"></span><span style="background:#3fd2ff"></span>
+      </div>
+      <p>手前＝暖色、奥＝寒色の二層のブロック崩しが半透明で重なった版。パドルは1つ共通、ボールはレイヤーごとに1個ずつ。2個のボールを同時に追う、高難度バージョン。</p>
+      <div class="play">▶ プレイする</div>
+    </a>
+
+    <a class="card" href="breakout-single.html">
+      <span class="badge single">通常版</span>
+      <h2>シングル版</h2>
+      <div class="swatches">
+        <span style="background:#ff5d8f"></span><span style="background:#ffa94d"></span>
+        <span style="background:#ffe066"></span><span style="background:#69db7c"></span><span style="background:#4dd0e1"></span>
+      </div>
+      <p>虹色グラデーションの半透明ブロック45個を壊す、基本のブロック崩し。まずはこちらの感触からどうぞ。</p>
+      <div class="play">▶ プレイする</div>
+    </a>
+  </div>
+
+  <footer>
+    操作：マウス・←→キー・タッチでパドル移動 ／ スペース：発射・一時停止 ／ R：リスタート<br>
+    three.js を CDN から読み込むため、プレイにはネット接続が必要です。
+  </footer>
+</main>
+</body>
+</html>
