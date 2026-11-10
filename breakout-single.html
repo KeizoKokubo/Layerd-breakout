@@ -128,27 +128,31 @@ import * as THREE from 'three';
    Glass Breakout — three.js ブロック崩し
    ・描画は three.js（半透明マテリアル＋輪郭線でガラス感）
    ・座標系は (u, v)：u = パドル→ブロック方向、v = パドルの移動軸
-   ・横レイアウト（PC・タブレット）では U を大きく取り、
-     パドルとブロックの距離を離して操作の余裕を稼ぐ
+   ・レイアウトはウィンドウの形で決まる：横長なら横レイアウト
+     （U=25.6、距離を離して操作の余裕を作る）、縦長なら縦（U=12.8）。
+     プレイ中のリサイズにも追従し、状態を引き継いで切り替わる
    ============================================================ */
 
-// ---------- 表示モード ----------
-const isSmartphone = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches
-  && Math.min(screen.width, screen.height) <= 620);
-const LANDSCAPE = !isSmartphone;
-document.body.classList.add(LANDSCAPE ? 'landscape' : 'portrait');
-
-// ---------- フィールド ----------
-const FIELD = LANDSCAPE ? { U: 25.6, V: 15.2 } : { U: 12.8, V: 16.6 };
-const SPEED_MUL = LANDSCAPE ? 1.25 : 1;
-const PADDLE_U = 1.0, PADDLE_LEN = 2.9, PADDLE_THICK = 0.36;
-const BALL_R = 0.30;
+// ---------- レイアウト定数 ----------
 const COLS = 9, ROWS = 5;
 const BLOCK_SU = 0.74, GAP_U = 0.18, GAP_V = 0.13;
-const BLOCK_SV = Math.min(1.6, (FIELD.V - 1.2 - (COLS - 1) * GAP_V) / COLS);
-const SPAN_V = COLS * BLOCK_SV + (COLS - 1) * GAP_V;
+const PADDLE_U = 1.0, PADDLE_LEN = 2.9, PADDLE_THICK = 0.36;
+const BALL_R = 0.30;
 const ROW_COLORS = [0xff5d8f, 0xffa94d, 0xffe066, 0x69db7c, 0x4dd0e1];
 const ROW_POINTS = [50, 40, 30, 20, 10];
+
+// ---------- 表示モード（ウィンドウのアスペクト比で決まる） ----------
+let LANDSCAPE = (innerWidth / innerHeight) >= 1.0;
+let FIELD = { U: 12.8, V: 16.6 }, SPEED_MUL = 1, BLOCK_SV = 1.6, SPAN_V = 0, VIEW = { w: 0, h: 0 };
+function computeLayout() {
+  FIELD = LANDSCAPE ? { U: 25.6, V: 15.2 } : { U: 12.8, V: 16.6 };
+  SPEED_MUL = LANDSCAPE ? 1.25 : 1;
+  BLOCK_SV = Math.min(1.6, (FIELD.V - 1.2 - (COLS - 1) * GAP_V) / COLS);
+  SPAN_V = COLS * BLOCK_SV + (COLS - 1) * GAP_V;
+  VIEW = LANDSCAPE ? { w: FIELD.U + 1.6, h: FIELD.V + 1.6 } : { w: FIELD.V + 1.6, h: FIELD.U + 1.6 };
+}
+computeLayout();
+document.body.classList.add(LANDSCAPE ? 'landscape' : 'portrait');
 
 function toWorld(u, v) {
   return LANDSCAPE ? { x: u - FIELD.U / 2, y: v } : { x: v, y: u - FIELD.U / 2 };
@@ -160,6 +164,12 @@ function makeUVBox(su, sv, sz, mat) {
 function placeUV(obj, u, v, z) {
   const w = toWorld(u, v);
   obj.position.set(w.x, w.y, z);
+}
+function disposeObj(root) {
+  root.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => m.dispose());
+  });
 }
 
 // ---------- 状態 ----------
@@ -174,7 +184,6 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x0a0f2a, 17, 40);
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 120);
-const VIEW = LANDSCAPE ? { w: FIELD.U + 1.6, h: FIELD.V + 1.6 } : { w: FIELD.V + 1.6, h: FIELD.U + 1.6 };
 function fitCamera() {
   const aspect = innerWidth / innerHeight;
   camera.aspect = aspect;
@@ -217,50 +226,9 @@ scene.add(backLight);
   })));
 }
 
-// ---------- 背面パネル＋枠 ----------
-{
-  const panel = new THREE.Mesh(
-    new THREE.PlaneGeometry(VIEW.w + 1.5, VIEW.h + 1.5),
-    new THREE.MeshBasicMaterial({ color: 0x0d1440, transparent: true, opacity: 0.45 })
-  );
-  panel.position.z = -0.9;
-  scene.add(panel);
-
-  const frameMat = new THREE.MeshPhysicalMaterial({
-    color: 0xbfe3ff, transparent: true, opacity: 0.35,
-    roughness: 0.1, metalness: 0.1, clearcoat: 1
-  });
-  const mk = (su, sv, u, v) => {
-    const m = makeUVBox(su, sv, 0.5, frameMat);
-    placeUV(m, u, v, 0);
-    scene.add(m);
-  };
-  mk(FIELD.U + 0.8, 0.28, FIELD.U / 2, -(FIELD.V / 2 + 0.35));
-  mk(FIELD.U + 0.8, 0.28, FIELD.U / 2, FIELD.V / 2 + 0.35);
-  mk(0.28, FIELD.V + 1.0, FIELD.U + 0.35, 0);
-}
-
-// ---------- パドル ----------
-const paddle = new THREE.Group();
-{
-  const bar = makeUVBox(PADDLE_THICK, PADDLE_LEN, 0.55, new THREE.MeshPhysicalMaterial({
-    color: 0x66d9ff, transparent: true, opacity: 0.85,
-    roughness: 0.08, metalness: 0.15, clearcoat: 1,
-    emissive: 0x1166aa, emissiveIntensity: 0.55
-  }));
-  paddle.add(bar);
-  const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(bar.geometry),
-    new THREE.LineBasicMaterial({ color: 0xe8fbff, transparent: true, opacity: 0.95 })
-  );
-  bar.add(edges);
-}
-placeUV(paddle, PADDLE_U, 0, 0);
-scene.add(paddle);
-
 // ---------- ボール ----------
 const ball = {
-  u: 0, v: 0, vu: 0, vv: 0, speed: 7.2 * SPEED_MUL,
+  u: 0, v: 0, vu: 0, vv: 0, speed: 7.2,
   mesh: new THREE.Group(), trail: [], trailT: 0,
 };
 {
@@ -288,9 +256,11 @@ const ball = {
 const blocks = [];
 const blockGroup = new THREE.Group();
 scene.add(blockGroup);
-function buildBlocks() {
-  for (const b of blocks) blockGroup.remove(b.mesh);
+function buildBlocks(preserve = false) {
+  const prevAlive = preserve ? blocks.map((b) => b.alive) : null;
+  for (const b of blocks) { blockGroup.remove(b.mesh); disposeObj(b.mesh); }
   blocks.length = 0;
+  let idx = 0;
   for (let r = 0; r < ROWS; r++) {
     const color = ROW_COLORS[r % ROW_COLORS.length];
     const geo = LANDSCAPE ? new THREE.BoxGeometry(BLOCK_SU, BLOCK_SV, 0.65)
@@ -310,10 +280,89 @@ function buildBlocks() {
       const u = FIELD.U - 1.5 - r * (BLOCK_SU + GAP_U);
       const v = -SPAN_V / 2 + BLOCK_SV / 2 + c * (BLOCK_SV + GAP_V);
       placeUV(mesh, u, v, 0);
+      const alive = prevAlive ? prevAlive[idx] : true;
+      mesh.visible = alive;
       blockGroup.add(mesh);
-      blocks.push({ mesh, alive: true, row: r, u, v });
+      blocks.push({ mesh, alive, row: r, u, v });
+      idx++;
     }
   }
+}
+
+// ---------- フィールド構築（パネル・枠・パドル：レイアウトごとに作り直す） ----------
+let fieldGroup = null;
+let paddle = null;
+function buildField() {
+  if (fieldGroup) { scene.remove(fieldGroup); disposeObj(fieldGroup); }
+  fieldGroup = new THREE.Group();
+  scene.add(fieldGroup);
+
+  const panel = new THREE.Mesh(
+    new THREE.PlaneGeometry(VIEW.w + 1.5, VIEW.h + 1.5),
+    new THREE.MeshBasicMaterial({ color: 0x0d1440, transparent: true, opacity: 0.45 })
+  );
+  panel.position.z = -0.9;
+  fieldGroup.add(panel);
+
+  const frameMat = new THREE.MeshPhysicalMaterial({
+    color: 0xbfe3ff, transparent: true, opacity: 0.35,
+    roughness: 0.1, metalness: 0.1, clearcoat: 1
+  });
+  const mk = (su, sv, u, v) => {
+    const m = makeUVBox(su, sv, 0.5, frameMat);
+    placeUV(m, u, v, 0);
+    fieldGroup.add(m);
+  };
+  mk(FIELD.U + 0.8, 0.28, FIELD.U / 2, -(FIELD.V / 2 + 0.35));
+  mk(FIELD.U + 0.8, 0.28, FIELD.U / 2, FIELD.V / 2 + 0.35);
+  mk(0.28, FIELD.V + 1.0, FIELD.U + 0.35, 0);
+
+  paddle = new THREE.Group();
+  const bar = makeUVBox(PADDLE_THICK, PADDLE_LEN, 0.55, new THREE.MeshPhysicalMaterial({
+    color: 0x66d9ff, transparent: true, opacity: 0.85,
+    roughness: 0.08, metalness: 0.15, clearcoat: 1,
+    emissive: 0x1166aa, emissiveIntensity: 0.55
+  }));
+  paddle.add(bar);
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(bar.geometry),
+    new THREE.LineBasicMaterial({ color: 0xe8fbff, transparent: true, opacity: 0.95 })
+  );
+  bar.add(edges);
+  placeUV(paddle, PADDLE_U, paddleV, 0);
+  fieldGroup.add(paddle);
+
+  buildBlocks(true);
+}
+
+// ---------- レイアウト切り替え ----------
+function setHint() {
+  document.getElementById('hint').textContent = LANDSCAPE
+    ? 'マウス・↑↓・タッチで移動 ／ スペース：発射・一時停止 ／ R：リスタート'
+    : 'マウス・←→・タッチで移動 ／ スペース：発射・一時停止 ／ R：リスタート';
+}
+function switchMode(toLandscape) {
+  if (toLandscape === LANDSCAPE) return;
+  const oldU = FIELD.U, oldV = FIELD.V, oldMul = SPEED_MUL;
+  LANDSCAPE = toLandscape;
+  computeLayout();
+  const ru = FIELD.U / oldU, rv = FIELD.V / oldV;
+  paddleV *= rv;
+  paddleTargetV *= rv;
+  ball.u *= ru;
+  ball.v *= rv;
+  ball.speed *= SPEED_MUL / oldMul;
+  if (state === 'playing') {
+    const m = Math.hypot(ball.vu, ball.vv) || 1;
+    ball.vu = ball.vu / m * ball.speed;
+    ball.vv = ball.vv / m * ball.speed;
+  }
+  if (state !== 'ready') placeUV(ball.mesh, ball.u, ball.v, 0);
+  buildField();
+  document.body.classList.toggle('landscape', LANDSCAPE);
+  document.body.classList.toggle('portrait', !LANDSCAPE);
+  setHint();
+  fitCamera();
 }
 
 // ---------- 破片パーティクル ----------
@@ -498,19 +547,23 @@ addEventListener('keyup', (e) => {
   if (e.code === 'ArrowUp' || e.code === 'KeyW') keys.up = false;
   if (e.code === 'ArrowDown' || e.code === 'KeyS') keys.down = false;
 });
+let resizeTimer = null;
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   fitCamera();
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const a = innerWidth / innerHeight;
+    if (a >= 1.05 && !LANDSCAPE) switchMode(true);
+    else if (a <= 0.95 && LANDSCAPE) switchMode(false);
+  }, 250);
 });
-document.getElementById('hint').textContent = LANDSCAPE
-  ? 'マウス・↑↓・タッチで移動 ／ スペース：発射・一時停止 ／ R：リスタート'
-  : 'マウス・←→・タッチで移動 ／ スペース：発射・一時停止 ／ R：リスタート';
+setHint();
 
 // ---------- 物理＆描画 ----------
 const clock = new THREE.Clock();
 
 function step(dt) {
-  // パドル
   const KEY_SPEED = 13;
   if (!LANDSCAPE) {
     if (keys.left) paddleTargetV -= KEY_SPEED * dt;
@@ -576,7 +629,6 @@ function step(dt) {
     }
     if (state === 'playing') placeUV(ball.mesh, ball.u, ball.v, 0);
 
-    // 残像
     ball.trailT += dt;
     if (ball.trailT > 0.016) {
       ball.trailT = 0;
@@ -603,6 +655,7 @@ function animate() {
   });
   renderer.render(scene, camera);
 }
+buildField();
 resetGame(1);
 animate();
 </script>
