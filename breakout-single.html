@@ -127,62 +127,62 @@ import * as THREE from 'three';
 /* ============================================================
    Glass Breakout — three.js ブロック崩し
    ・描画は three.js（半透明マテリアル＋輪郭線でガラス感）
-   ・物理は XY 平面上の簡易 2D 判定（玉・壁・パドル・ブロック）
+   ・座標系は (u, v)：u = パドル→ブロック方向、v = パドルの移動軸
+   ・横レイアウト（PC・タブレット）では U を大きく取り、
+     パドルとブロックの距離を離して操作の余裕を稼ぐ
    ============================================================ */
 
-// ---------- 基本定数 ----------
-const FIELD = { left: -8, right: 8, top: 6, bottom: -6.4 };
-const PADDLE_Y = -5.3;
-const PADDLE_W = 2.9, PADDLE_H = 0.36;
-const BALL_R = 0.30;
-const BLOCK_COLS = 9, BLOCK_ROWS = 5;
-const BLOCK_W = 1.60, BLOCK_H = 0.72, GAP_X = 0.13, GAP_Y = 0.20;
-const BLOCK_TOP_Y = 4.55;
+// ---------- 表示モード ----------
+const isSmartphone = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches
+  && Math.min(screen.width, screen.height) <= 620);
+const LANDSCAPE = !isSmartphone;
+document.body.classList.add(LANDSCAPE ? 'landscape' : 'portrait');
 
-// 行ごとの色（上から下へ、虹色グラデーション）
+// ---------- フィールド ----------
+const FIELD = LANDSCAPE ? { U: 25.6, V: 15.2 } : { U: 12.8, V: 16.6 };
+const SPEED_MUL = LANDSCAPE ? 1.25 : 1;
+const PADDLE_U = 1.0, PADDLE_LEN = 2.9, PADDLE_THICK = 0.36;
+const BALL_R = 0.30;
+const COLS = 9, ROWS = 5;
+const BLOCK_SU = 0.74, GAP_U = 0.18, GAP_V = 0.13;
+const BLOCK_SV = Math.min(1.6, (FIELD.V - 1.2 - (COLS - 1) * GAP_V) / COLS);
+const SPAN_V = COLS * BLOCK_SV + (COLS - 1) * GAP_V;
 const ROW_COLORS = [0xff5d8f, 0xffa94d, 0xffe066, 0x69db7c, 0x4dd0e1];
-const ROW_POINTS = [50, 40, 30, 20, 10]; // 上の行ほど高得点
+const ROW_POINTS = [50, 40, 30, 20, 10];
+
+function toWorld(u, v) {
+  return LANDSCAPE ? { x: u - FIELD.U / 2, y: v } : { x: v, y: u - FIELD.U / 2 };
+}
+function makeUVBox(su, sv, sz, mat) {
+  const geo = LANDSCAPE ? new THREE.BoxGeometry(su, sv, sz) : new THREE.BoxGeometry(sv, su, sz);
+  return new THREE.Mesh(geo, mat);
+}
+function placeUV(obj, u, v, z) {
+  const w = toWorld(u, v);
+  obj.position.set(w.x, w.y, z);
+}
 
 // ---------- 状態 ----------
-let state = 'ready';        // ready | playing | paused | over | clear
+let state = 'ready'; // ready | playing | paused | over | clear
 let score = 0, lives = 3, level = 1;
-let ballSpeed = 7.2;
-const vel = new THREE.Vector2(0, 0); // ボール速度ベクトル（大きさ = ballSpeed）
-let paddleTargetX = 0;
-let keys = { left: false, right: false, up: false, down: false };
+let paddleV = 0, paddleTargetV = 0;
+const keys = { left: false, right: false, up: false, down: false };
 
 // ---------- シーン ----------
 const container = document.getElementById('app');
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x0a0f2a, 0.012);
+scene.fog = new THREE.Fog(0x0a0f2a, 17, 40);
 
-// ---------- 表示モード ----------
-// 端末で決める（スマホ=縦レイアウト / PC・タブレット=横レイアウト）。
-// リサイズでは切り替えないので、PCで途中にウィンドウサイズを変えても
-// レイアウトは変わらず、カメラのフィットだけが追従する。
-const isSmartphone = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches
-  && Math.min(screen.width, screen.height) <= 620);
-const LANDSCAPE = !isSmartphone; // タブレットは PC 準拠で横レイアウト
-document.body.classList.add(LANDSCAPE ? 'landscape' : 'portrait');
-// ゲームの論理座標は一切変えず、ワールド全体を表示だけ回転させる。
-// 横レイアウト = 時計回り90°（ブロックが右、パドルが左に来る）。
-const worldGroup = new THREE.Group();
-worldGroup.rotation.z = LANDSCAPE ? -Math.PI / 2 : 0;
-scene.add(worldGroup);
-
-const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
-camera.position.set(0, 1.2, 15.5);
-// 画面にフィールド全体が収まるよう、カメラ距離をアスペクト比から決める。
-// 縦長のスマホ画面でもブロックが全部収まるのはこの計算のおかげ。
-const VIEW = { w: 17.6, h: 14.0 }; // 枠を含む見せたい範囲（縦レイアウト基準）
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 120);
+const VIEW = LANDSCAPE ? { w: FIELD.U + 1.6, h: FIELD.V + 1.6 } : { w: FIELD.V + 1.6, h: FIELD.U + 1.6 };
 function fitCamera() {
   const aspect = innerWidth / innerHeight;
   camera.aspect = aspect;
-  const effW = LANDSCAPE ? VIEW.h : VIEW.w; // 横レイアウトでは縦横が入れ替わる
-  const effH = LANDSCAPE ? VIEW.w : VIEW.h;
   const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-  const dist = Math.max(effH / 2, (effW / 2) / aspect) / t * 1.04;
-  camera.position.set(0, LANDSCAPE ? 0 : 1.2, dist);
+  const dist = Math.max(VIEW.h / 2, (VIEW.w / 2) / aspect) / t * 1.03;
+  scene.fog.near = dist * 0.9;
+  scene.fog.far = dist * 2.3;
+  camera.position.set(0, 0, dist);
   camera.lookAt(0, 0, 0);
   camera.updateProjectionMatrix();
 }
@@ -206,62 +206,63 @@ scene.add(backLight);
 {
   const N = 260, pos = new Float32Array(N * 3);
   for (let i = 0; i < N; i++) {
-    pos[i * 3] = (Math.random() - 0.5) * 44;
-    pos[i * 3 + 1] = (Math.random() - 0.5) * 28;
+    pos[i * 3] = (Math.random() - 0.5) * 52;
+    pos[i * 3 + 1] = (Math.random() - 0.5) * 30;
     pos[i * 3 + 2] = -6 - Math.random() * 10;
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  const m = new THREE.PointsMaterial({ color: 0xaac4ff, size: 0.09, transparent: true, opacity: 0.75 });
-  scene.add(new THREE.Points(g, m));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({
+    color: 0xaac4ff, size: 0.09, transparent: true, opacity: 0.75
+  })));
 }
 
-// ---------- プレイフィールド背面パネル＋枠 ----------
+// ---------- 背面パネル＋枠 ----------
 {
   const panel = new THREE.Mesh(
-    new THREE.PlaneGeometry(17.4, 13.6),
+    new THREE.PlaneGeometry(VIEW.w + 1.5, VIEW.h + 1.5),
     new THREE.MeshBasicMaterial({ color: 0x0d1440, transparent: true, opacity: 0.45 })
   );
   panel.position.z = -0.9;
-  worldGroup.add(panel);
+  scene.add(panel);
 
   const frameMat = new THREE.MeshPhysicalMaterial({
     color: 0xbfe3ff, transparent: true, opacity: 0.35,
     roughness: 0.1, metalness: 0.1, clearcoat: 1
   });
-  const mkWall = (w, h, x, y) => {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.5), frameMat);
-    mesh.position.set(x, y, 0);
-    worldGroup.add(mesh);
+  const mk = (su, sv, u, v) => {
+    const m = makeUVBox(su, sv, 0.5, frameMat);
+    placeUV(m, u, v, 0);
+    scene.add(m);
   };
-  mkWall(0.28, 13.0, FIELD.left - 0.35, -0.2);   // 左壁（見た目）
-  mkWall(0.28, 13.0, FIELD.right + 0.35, -0.2);  // 右壁
-  mkWall(17.0, 0.28, 0, FIELD.top + 0.35);       // 天井
+  mk(FIELD.U + 0.8, 0.28, FIELD.U / 2, -(FIELD.V / 2 + 0.35));
+  mk(FIELD.U + 0.8, 0.28, FIELD.U / 2, FIELD.V / 2 + 0.35);
+  mk(0.28, FIELD.V + 1.0, FIELD.U + 0.35, 0);
 }
 
 // ---------- パドル ----------
 const paddle = new THREE.Group();
 {
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(PADDLE_W, PADDLE_H, 0.55),
-    new THREE.MeshPhysicalMaterial({
-      color: 0x66d9ff, transparent: true, opacity: 0.85,
-      roughness: 0.08, metalness: 0.15, clearcoat: 1,
-      emissive: 0x1166aa, emissiveIntensity: 0.55
-    })
-  );
-  paddle.add(body);
+  const bar = makeUVBox(PADDLE_THICK, PADDLE_LEN, 0.55, new THREE.MeshPhysicalMaterial({
+    color: 0x66d9ff, transparent: true, opacity: 0.85,
+    roughness: 0.08, metalness: 0.15, clearcoat: 1,
+    emissive: 0x1166aa, emissiveIntensity: 0.55
+  }));
+  paddle.add(bar);
   const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(body.geometry),
+    new THREE.EdgesGeometry(bar.geometry),
     new THREE.LineBasicMaterial({ color: 0xe8fbff, transparent: true, opacity: 0.95 })
   );
-  paddle.add(edges);
+  bar.add(edges);
 }
-paddle.position.set(0, PADDLE_Y, 0);
-worldGroup.add(paddle);
+placeUV(paddle, PADDLE_U, 0, 0);
+scene.add(paddle);
 
 // ---------- ボール ----------
-const ball = new THREE.Group();
+const ball = {
+  u: 0, v: 0, vu: 0, vv: 0, speed: 7.2 * SPEED_MUL,
+  mesh: new THREE.Group(), trail: [], trailT: 0,
+};
 {
   const core = new THREE.Mesh(
     new THREE.SphereGeometry(BALL_R, 32, 32),
@@ -270,41 +271,31 @@ const ball = new THREE.Group();
       roughness: 0.15, metalness: 0, clearcoat: 1
     })
   );
-  ball.add(core);
-  const glow = new THREE.PointLight(0x9fc8ff, 26, 11, 1.8);
-  ball.add(glow);
-}
-ball.position.set(0, PADDLE_Y + PADDLE_H / 2 + BALL_R + 0.02, 0);
-worldGroup.add(ball);
-// ボールの残像（簡易トレイル）
-const trail = [];
-{
-  const geo = new THREE.SphereGeometry(BALL_R, 16, 16);
+  ball.mesh.add(core);
+  ball.mesh.add(new THREE.PointLight(0x9fc8ff, 26, 11, 1.8));
+  scene.add(ball.mesh);
+  const tGeo = new THREE.SphereGeometry(BALL_R, 16, 16);
   for (let i = 0; i < 10; i++) {
-    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+    const m = new THREE.Mesh(tGeo, new THREE.MeshBasicMaterial({
       color: 0x8fc4ff, transparent: true, opacity: 0
     }));
-    worldGroup.add(m); trail.push(m);
+    scene.add(m);
+    ball.trail.push(m);
   }
 }
 
 // ---------- ブロック ----------
-const blocks = []; // { mesh, alive, row }
+const blocks = [];
 const blockGroup = new THREE.Group();
-worldGroup.add(blockGroup);
-
+scene.add(blockGroup);
 function buildBlocks() {
-  // 既存を片付ける
-  for (const b of blocks) { blockGroup.remove(b.mesh); b.mesh.geometry.dispose(); }
+  for (const b of blocks) blockGroup.remove(b.mesh);
   blocks.length = 0;
-
-  const totalW = BLOCK_COLS * BLOCK_W + (BLOCK_COLS - 1) * GAP_X;
-  const startX = -totalW / 2 + BLOCK_W / 2;
-
-  for (let r = 0; r < BLOCK_ROWS; r++) {
+  for (let r = 0; r < ROWS; r++) {
     const color = ROW_COLORS[r % ROW_COLORS.length];
-    const geo = new THREE.BoxGeometry(BLOCK_W, BLOCK_H, 0.65);
-    for (let c = 0; c < BLOCK_COLS; c++) {
+    const geo = LANDSCAPE ? new THREE.BoxGeometry(BLOCK_SU, BLOCK_SV, 0.65)
+                          : new THREE.BoxGeometry(BLOCK_SV, BLOCK_SU, 0.65);
+    for (let c = 0; c < COLS; c++) {
       const mat = new THREE.MeshPhysicalMaterial({
         color, transparent: true, opacity: 0.62,
         roughness: 0.12, metalness: 0.05, clearcoat: 1,
@@ -316,37 +307,33 @@ function buildBlocks() {
         new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 })
       );
       mesh.add(edge);
-      mesh.position.set(
-        startX + c * (BLOCK_W + GAP_X),
-        BLOCK_TOP_Y - r * (BLOCK_H + GAP_Y),
-        0
-      );
+      const u = FIELD.U - 1.5 - r * (BLOCK_SU + GAP_U);
+      const v = -SPAN_V / 2 + BLOCK_SV / 2 + c * (BLOCK_SV + GAP_V);
+      placeUV(mesh, u, v, 0);
       blockGroup.add(mesh);
-      blocks.push({ mesh, alive: true, row: r });
+      blocks.push({ mesh, alive: true, row: r, u, v });
     }
   }
 }
-buildBlocks();
 
-// ---------- 破片パーティクル（プール方式） ----------
-const PARTICLE_MAX = 140;
+// ---------- 破片パーティクル ----------
 const particles = [];
 {
   const geo = new THREE.BoxGeometry(0.13, 0.13, 0.13);
-  for (let i = 0; i < PARTICLE_MAX; i++) {
+  for (let i = 0; i < 140; i++) {
     const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }));
     mesh.visible = false;
-    worldGroup.add(mesh);
+    scene.add(mesh);
     particles.push({ mesh, vel: new THREE.Vector3(), life: 0, maxLife: 0 });
   }
 }
-function burst(x, y, colorHex) {
+function burst(x, y, z, colorHex) {
   let spawned = 0;
   for (const p of particles) {
     if (p.life > 0) continue;
     p.mesh.visible = true;
     p.mesh.material.color.setHex(colorHex);
-    p.mesh.position.set(x, y, 0.2);
+    p.mesh.position.set(x, y, z);
     const a = Math.random() * Math.PI * 2, sp = 1.6 + Math.random() * 3.4;
     p.vel.set(Math.cos(a) * sp, Math.sin(a) * sp, (Math.random() - 0.5) * 2.2);
     p.maxLife = p.life = 0.45 + Math.random() * 0.35;
@@ -359,7 +346,7 @@ function updateParticles(dt) {
     if (p.life <= 0) continue;
     p.life -= dt;
     if (p.life <= 0) { p.mesh.visible = false; p.mesh.material.opacity = 0; continue; }
-    p.vel.y -= 4.5 * dt; // ちょい重力
+    p.vel.y -= 4.5 * dt;
     p.mesh.position.addScaledVector(p.vel, dt);
     p.mesh.rotation.x += dt * 7; p.mesh.rotation.y += dt * 9;
     const t = p.life / p.maxLife;
@@ -368,7 +355,7 @@ function updateParticles(dt) {
   }
 }
 
-// ---------- サウンド（WebAudioの短いビープ） ----------
+// ---------- サウンド ----------
 let audioCtx = null, soundOn = true;
 function beep(freq, dur = 0.06, type = 'square', vol = 0.05) {
   if (!soundOn) return;
@@ -412,82 +399,83 @@ function showOverlay(title, text, btn) {
 function hideOverlay() { el.overlay.classList.add('hidden'); }
 
 // ---------- ゲーム進行 ----------
-function resetBall() {
-  state = 'ready';
-  vel.set(0, 0);
-  ball.position.set(paddle.position.x, PADDLE_Y + PADDLE_H / 2 + BALL_R + 0.02, 0);
+function ballHomeU() { return PADDLE_U + PADDLE_THICK / 2 + BALL_R + 0.02; }
+function parkBall() {
+  ball.u = ballHomeU();
+  ball.v = paddleV;
+  placeUV(ball.mesh, ball.u, ball.v, 0);
 }
 function launchBall() {
   if (state !== 'ready') return;
   state = 'playing';
-  const ang = (55 + Math.random() * 20) * Math.PI / 180; // 上向き 55〜75°
-  const dirX = (Math.random() < 0.5 ? -1 : 1) * Math.cos(ang);
-  vel.set(dirX, Math.sin(ang)).normalize().multiplyScalar(ballSpeed);
+  const ang = THREE.MathUtils.degToRad((15 + Math.random() * 35) * (Math.random() < 0.5 ? -1 : 1));
+  ball.vu = Math.cos(ang) * ball.speed;
+  ball.vv = Math.sin(ang) * ball.speed;
   beep(660, 0.07, 'sine', 0.06);
 }
 function resetGame(newLevel = 1) {
   level = newLevel;
   if (newLevel === 1) { score = 0; lives = 3; }
-  ballSpeed = 7.2 + (level - 1) * 0.9;
-  paddle.position.x = 0; paddleTargetX = 0;
+  ball.speed = 7.2 * SPEED_MUL + (level - 1) * 0.9;
+  paddleV = 0; paddleTargetV = 0;
+  placeUV(paddle, PADDLE_U, 0, 0);
   buildBlocks();
-  resetBall();
+  for (const m of ball.trail) m.material.opacity = 0;
+  state = 'ready';
+  ball.vu = 0; ball.vv = 0;
+  parkBall();
   refreshHUD();
 }
 function loseBall() {
+  for (const m of ball.trail) m.material.opacity = 0;
   lives--;
   refreshHUD();
   beep(160, 0.25, 'sawtooth', 0.06);
+  const w = toWorld(0.2, ball.v);
+  burst(w.x, w.y, 0, 0x8899bb);
   if (lives <= 0) {
     state = 'over';
     showOverlay('GAME OVER', `スコアは ${score} 点だったよ。\nもう一度挑戦してみよう！`, '↻ もう一度');
   } else {
-    resetBall();
+    state = 'ready';
+    ball.vu = 0; ball.vv = 0;
+    parkBall();
   }
 }
 function clearLevel() {
   state = 'clear';
-  score += 500; // クリアボーナス
+  score += 500;
   refreshHUD();
   beep(523, 0.1, 'sine', 0.06);
   setTimeout(() => beep(784, 0.14, 'sine', 0.06), 110);
   showOverlay('LEVEL CLEAR! 🎉', `ボーナス +500点！ スコア ${score} 点。\n次のレベルはボールの速度が上がるよ。`, `▶ レベル ${level + 1} へ`);
 }
-
 el.oBtn.addEventListener('click', () => {
-  if (state === 'over' || state === 'clear' || state === 'ready' && score === 0 && lives === 3) {
-    if (state === 'clear') resetGame(level + 1);
-    else if (state === 'over') resetGame(1);
-    hideOverlay();
-    launchBall();
-  } else if (state === 'paused') {
-    state = 'playing';
-    hideOverlay();
-  }
+  if (state === 'over') { resetGame(1); hideOverlay(); launchBall(); }
+  else if (state === 'clear') { resetGame(level + 1); hideOverlay(); launchBall(); }
+  else if (state === 'ready' && score === 0 && lives === 3) { hideOverlay(); launchBall(); }
+  else if (state === 'paused') { state = 'playing'; hideOverlay(); }
 });
 
 // ---------- 入力 ----------
-// ポインタ位置→パドルの目標位置：レイを z=0 平面に当て、worldGroup の
-// ローカル座標に戻す。パドルは常にローカル X 軸上を動くので、
-// 縦・横どちらのレイアウトでも同じ計算でよい（回転は group が吸収する）。
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 const worldPlaneZ0 = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-function pointerToPaddleX(clientX, clientY) {
+function pointerToV(clientX, clientY) {
   ndc.set((clientX / innerWidth) * 2 - 1, -((clientY / innerHeight) * 2 - 1));
   raycaster.setFromCamera(ndc, camera);
   const hit = new THREE.Vector3();
   if (!raycaster.ray.intersectPlane(worldPlaneZ0, hit)) return null;
-  return worldGroup.worldToLocal(hit).x;
+  return LANDSCAPE ? hit.y : hit.x;
 }
 addEventListener('pointermove', (e) => {
-  const x = pointerToPaddleX(e.clientX, e.clientY);
-  if (x !== null && isFinite(x)) paddleTargetX = x;
+  const v = pointerToV(e.clientX, e.clientY);
+  if (v !== null && isFinite(v)) paddleTargetV = v;
 });
 addEventListener('pointerdown', (e) => {
   if (e.target.closest('#overlay, #sound-btn')) return;
-  const x = pointerToPaddleX(e.clientX, e.clientY);
-  if (x !== null && isFinite(x)) paddleTargetX = x;
+  const v = pointerToV(e.clientX, e.clientY);
+  if (v !== null && isFinite(v)) paddleTargetV = v;
   if (state === 'ready') launchBall();
   else if (state === 'paused') { state = 'playing'; hideOverlay(); }
 });
@@ -502,9 +490,7 @@ addEventListener('keydown', (e) => {
     else if (state === 'playing') { state = 'paused'; showOverlay('PAUSED', '一時停止中。', '▶ 再開する'); }
     else if (state === 'paused') { state = 'playing'; hideOverlay(); }
   }
-  if (e.code === 'KeyR' && (state === 'over' || state === 'clear' || state === 'playing' || state === 'paused')) {
-    resetGame(1); hideOverlay(); launchBall();
-  }
+  if (e.code === 'KeyR' && state !== 'ready') { resetGame(1); hideOverlay(); launchBall(); }
 });
 addEventListener('keyup', (e) => {
   if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
@@ -514,112 +500,94 @@ addEventListener('keyup', (e) => {
 });
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
-  fitCamera(); // モードは端末で固定。サイズ変更ではカメラのフィットだけ追従する
+  fitCamera();
 });
-// ヒント文言はレイアウトに合わせる
 document.getElementById('hint').textContent = LANDSCAPE
   ? 'マウス・↑↓・タッチで移動 ／ スペース：発射・一時停止 ／ R：リスタート'
   : 'マウス・←→・タッチで移動 ／ スペース：発射・一時停止 ／ R：リスタート';
 
-
-// ---------- 物理＆描画ループ ----------
+// ---------- 物理＆描画 ----------
 const clock = new THREE.Clock();
-const trailTimer = { t: 0 };
 
 function step(dt) {
-  // --- パドル移動（キー入力をターゲットへ反映し、滑らかに追従） ---
+  // パドル
   const KEY_SPEED = 13;
   if (!LANDSCAPE) {
-    if (keys.left) paddleTargetX -= KEY_SPEED * dt;
-    if (keys.right) paddleTargetX += KEY_SPEED * dt;
+    if (keys.left) paddleTargetV -= KEY_SPEED * dt;
+    if (keys.right) paddleTargetV += KEY_SPEED * dt;
   } else {
-    // 横レイアウトではパドルは画面の上下へ動く。
-    // 画面の上方向はローカル座標では targetX が減る向き（回転の符号に注意）。
-    if (keys.up) paddleTargetX -= KEY_SPEED * dt;
-    if (keys.down) paddleTargetX += KEY_SPEED * dt;
+    if (keys.up) paddleTargetV += KEY_SPEED * dt;
+    if (keys.down) paddleTargetV -= KEY_SPEED * dt;
   }
-  const halfP = PADDLE_W / 2;
-  paddleTargetX = THREE.MathUtils.clamp(paddleTargetX, FIELD.left + halfP, FIELD.right - halfP);
-  paddle.position.x += (paddleTargetX - paddle.position.x) * Math.min(1, dt * 18);
-  paddle.rotation.z = THREE.MathUtils.clamp((paddleTargetX - paddle.position.x) * -0.03, -0.06, 0.06);
+  const limit = FIELD.V / 2 - PADDLE_LEN / 2;
+  paddleTargetV = THREE.MathUtils.clamp(paddleTargetV, -limit, limit);
+  paddleV += (paddleTargetV - paddleV) * Math.min(1, dt * 18);
+  placeUV(paddle, PADDLE_U, paddleV, 0);
+  paddle.rotation.z = LANDSCAPE ? 0 : THREE.MathUtils.clamp((paddleTargetV - paddleV) * -0.03, -0.06, 0.06);
 
-  if (state === 'ready') {
-    ball.position.x = paddle.position.x;
-    ball.position.y = PADDLE_Y + PADDLE_H / 2 + BALL_R + 0.02;
-  }
+  if (state === 'ready') parkBall();
 
   if (state === 'playing') {
-    // サブステップで高速時のすり抜けを防ぐ
     const steps = 3, sdt = dt / steps;
+    const halfLen = PADDLE_LEN / 2;
     for (let s = 0; s < steps && state === 'playing'; s++) {
-      ball.position.x += vel.x * sdt;
-      ball.position.y += vel.y * sdt;
-      const bx = ball.position.x, by = ball.position.y;
+      ball.u += ball.vu * sdt;
+      ball.v += ball.vv * sdt;
 
-      // 左右の壁
-      if (bx - BALL_R < FIELD.left) { ball.position.x = FIELD.left + BALL_R; vel.x = Math.abs(vel.x); beep(300, 0.04); }
-      if (bx + BALL_R > FIELD.right) { ball.position.x = FIELD.right - BALL_R; vel.x = -Math.abs(vel.x); beep(300, 0.04); }
-      // 天井
-      if (by + BALL_R > FIELD.top) { ball.position.y = FIELD.top - BALL_R; vel.y = -Math.abs(vel.y); beep(300, 0.04); }
-      // 床 → ミス
-      if (by - BALL_R < FIELD.bottom) { loseBall(); break; }
+      if (ball.v - BALL_R < -FIELD.V / 2) { ball.v = -FIELD.V / 2 + BALL_R; ball.vv = Math.abs(ball.vv); beep(300, 0.04); }
+      if (ball.v + BALL_R > FIELD.V / 2) { ball.v = FIELD.V / 2 - BALL_R; ball.vv = -Math.abs(ball.vv); beep(300, 0.04); }
+      if (ball.u + BALL_R > FIELD.U) { ball.u = FIELD.U - BALL_R; ball.vu = -Math.abs(ball.vu); beep(300, 0.04); }
+      if (ball.u < -0.5) { loseBall(); break; }
 
-      // パドル
-      if (vel.y < 0 &&
-          by - BALL_R <= PADDLE_Y + PADDLE_H / 2 &&
-          by - BALL_R >= PADDLE_Y - PADDLE_H &&
-          Math.abs(bx - paddle.position.x) <= halfP + BALL_R * 0.6) {
-        const ratio = THREE.MathUtils.clamp((bx - paddle.position.x) / halfP, -1, 1);
-        const ang = ratio * (Math.PI / 3); // 最大 ±60°
-        const sp = Math.min(ballSpeed * 1.01, 13);
-        ballSpeed = sp;
-        vel.set(Math.sin(ang) * sp, Math.cos(ang) * sp);
-        ball.position.y = PADDLE_Y + PADDLE_H / 2 + BALL_R + 0.01;
+      if (ball.vu < 0 &&
+          ball.u - BALL_R <= PADDLE_U + PADDLE_THICK / 2 &&
+          ball.u - BALL_R >= PADDLE_U - 1.0 &&
+          Math.abs(ball.v - paddleV) <= halfLen + BALL_R * 0.6) {
+        const ratio = THREE.MathUtils.clamp((ball.v - paddleV) / halfLen, -1, 1);
+        const ang = ratio * (Math.PI / 3);
+        ball.speed = Math.min(ball.speed * 1.01, 16);
+        ball.vu = Math.cos(ang) * ball.speed;
+        ball.vv = Math.sin(ang) * ball.speed;
+        ball.u = ballHomeU() + 0.01;
         beep(440, 0.05, 'sine', 0.06);
       }
 
-      // ブロック
       for (const b of blocks) {
         if (!b.alive) continue;
-        const dx = bx - b.mesh.position.x, dy = by - b.mesh.position.y;
-        if (Math.abs(dx) < BLOCK_W / 2 + BALL_R && Math.abs(dy) < BLOCK_H / 2 + BALL_R) {
-          const overlapX = BLOCK_W / 2 + BALL_R - Math.abs(dx);
-          const overlapY = BLOCK_H / 2 + BALL_R - Math.abs(dy);
-          if (overlapX < overlapY) vel.x = dx > 0 ? Math.abs(vel.x) : -Math.abs(vel.x);
-          else vel.y = dy > 0 ? Math.abs(vel.y) : -Math.abs(vel.y);
-          // 速度の大きさを一定に保つ
-          vel.normalize().multiplyScalar(ballSpeed);
+        const du = ball.u - b.u, dv = ball.v - b.v;
+        if (Math.abs(du) < BLOCK_SU / 2 + BALL_R && Math.abs(dv) < BLOCK_SV / 2 + BALL_R) {
+          const overlapU = BLOCK_SU / 2 + BALL_R - Math.abs(du);
+          const overlapV = BLOCK_SV / 2 + BALL_R - Math.abs(dv);
+          if (overlapU < overlapV) ball.vu = du > 0 ? Math.abs(ball.vu) : -Math.abs(ball.vu);
+          else ball.vv = dv > 0 ? Math.abs(ball.vv) : -Math.abs(ball.vv);
+          const cur = Math.hypot(ball.vu, ball.vv) || 1;
+          ball.vu = ball.vu / cur * ball.speed;
+          ball.vv = ball.vv / cur * ball.speed;
           b.alive = false;
           b.mesh.visible = false;
-          burst(b.mesh.position.x, b.mesh.position.y, ROW_COLORS[b.row % ROW_COLORS.length]);
+          burst(b.mesh.position.x, b.mesh.position.y, 0, ROW_COLORS[b.row % ROW_COLORS.length]);
           score += ROW_POINTS[b.row % ROW_POINTS.length];
           refreshHUD();
-          beep(520 + (BLOCK_ROWS - b.row) * 90, 0.06, 'square', 0.045);
+          beep(520 + (ROWS - b.row) * 90, 0.06, 'square', 0.045);
           if (blocks.every(x => !x.alive)) clearLevel();
           break;
         }
       }
     }
-  }
+    if (state === 'playing') placeUV(ball.mesh, ball.u, ball.v, 0);
 
-  // --- 残像 ---
-  trailTimer.t += dt;
-  if (trailTimer.t > 0.016) {
-    trailTimer.t = 0;
-    for (let i = trail.length - 1; i > 0; i--) {
-      trail[i].position.copy(trail[i - 1].position);
-      trail[i].material.opacity = (state === 'playing') ? 0.16 * (1 - i / trail.length) : 0;
-      const s = 1 - i / (trail.length + 2);
-      trail[i].scale.setScalar(s);
+    // 残像
+    ball.trailT += dt;
+    if (ball.trailT > 0.016) {
+      ball.trailT = 0;
+      for (let i = ball.trail.length - 1; i > 0; i--) {
+        ball.trail[i].position.copy(ball.trail[i - 1].position);
+        ball.trail[i].material.opacity = state === 'playing' ? 0.16 * (1 - i / ball.trail.length) : 0;
+        ball.trail[i].scale.setScalar(1 - i / (ball.trail.length + 2));
+      }
+      ball.trail[0].position.copy(ball.mesh.position);
+      ball.trail[0].material.opacity = state === 'playing' ? 0.16 : 0;
     }
-    trail[0].position.copy(ball.position);
-    trail[0].material.opacity = state === 'playing' ? 0.16 : 0;
-  }
-
-  // --- カメラのほんの少しの揺れ（パドルに追従、縦レイアウトのみ） ---
-  if (!LANDSCAPE) {
-    camera.position.x += ((paddle.position.x * 0.12) - camera.position.x) * Math.min(1, dt * 3);
-    camera.lookAt(camera.position.x * 0.6, 0, 0);
   }
 
   updateParticles(dt);
@@ -629,14 +597,13 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.033);
   if (state !== 'paused') step(dt);
-  // ブロックのほんのりした呼吸（明滅）でガラス感を出す
   const t = performance.now() * 0.001;
   blockGroup.children.forEach((m, i) => {
     if (m.visible) m.material.emissiveIntensity = 0.15 + 0.07 * Math.sin(t * 1.6 + i * 0.35);
   });
   renderer.render(scene, camera);
 }
-refreshHUD();
+resetGame(1);
 animate();
 </script>
 </body>
