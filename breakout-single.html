@@ -129,7 +129,8 @@ import * as THREE from 'three';
    ・描画は three.js（半透明マテリアル＋輪郭線でガラス感）
    ・座標系は (u, v)：u = パドル→ブロック方向、v = パドルの移動軸
    ・レイアウトはウィンドウの形で決まる：横長なら横レイアウト
-     （U=25.6、距離を離して操作の余裕を作る）、縦長なら縦（U=12.8）。
+     （U=25.6、距離を離して操作の余裕を作る）、縦長なら縦
+     （U は窓の縦長さに合わせて伸ばし、画面いっぱいに広げる）。
      プレイ中のリサイズにも追従し、状態を引き継いで切り替わる
    ============================================================ */
 
@@ -144,14 +145,23 @@ const ROW_POINTS = [50, 40, 30, 20, 10];
 // ---------- 表示モード（ウィンドウのアスペクト比で決まる） ----------
 let LANDSCAPE = (innerWidth / innerHeight) >= 1.0;
 let FIELD = { U: 12.8, V: 16.6 }, SPEED_MUL = 1, BLOCK_SV = 1.6, SPAN_V = 0, VIEW = { w: 0, h: 0 };
-function computeLayout() {
-  FIELD = LANDSCAPE ? { U: 25.6, V: 15.2 } : { U: 12.8, V: 16.6 };
-  SPEED_MUL = LANDSCAPE ? 1.25 : 1;
+function dimsFor(landscape, aspect) {
+  if (landscape) return { U: 25.6, V: 15.2, mul: 1.25 };
+  // 縦レイアウトは窓の縦長さに合わせて U を伸ばし、
+  // ブロックとパドルが画面の上下いっぱいに広がるようにする。
+  // 速度は U に比例させ、画面上で見たボールの速さ感を変えない。
+  const U = Math.min(34, Math.max(12.8, (16.6 + 1.6) / aspect - 1.6));
+  return { U, V: 16.6, mul: U / 12.8 };
+}
+function computeLayout(aspect) {
+  const d = dimsFor(LANDSCAPE, aspect);
+  FIELD = { U: d.U, V: d.V };
+  SPEED_MUL = d.mul;
   BLOCK_SV = Math.min(1.6, (FIELD.V - 1.2 - (COLS - 1) * GAP_V) / COLS);
   SPAN_V = COLS * BLOCK_SV + (COLS - 1) * GAP_V;
   VIEW = LANDSCAPE ? { w: FIELD.U + 1.6, h: FIELD.V + 1.6 } : { w: FIELD.V + 1.6, h: FIELD.U + 1.6 };
 }
-computeLayout();
+computeLayout(innerWidth / innerHeight);
 document.body.classList.add(LANDSCAPE ? 'landscape' : 'portrait');
 
 function toWorld(u, v) {
@@ -341,11 +351,10 @@ function setHint() {
     ? 'マウス・↑↓・タッチで移動 ／ スペース：発射・一時停止 ／ R：リスタート'
     : 'マウス・←→・タッチで移動 ／ スペース：発射・一時停止 ／ R：リスタート';
 }
-function switchMode(toLandscape) {
-  if (toLandscape === LANDSCAPE) return;
+function applyLayout(toLandscape, aspect) {
   const oldU = FIELD.U, oldV = FIELD.V, oldMul = SPEED_MUL;
   LANDSCAPE = toLandscape;
-  computeLayout();
+  computeLayout(aspect);
   const ru = FIELD.U / oldU, rv = FIELD.V / oldV;
   paddleV *= rv;
   paddleTargetV *= rv;
@@ -554,8 +563,9 @@ addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     const a = innerWidth / innerHeight;
-    if (a >= 1.05 && !LANDSCAPE) switchMode(true);
-    else if (a <= 0.95 && LANDSCAPE) switchMode(false);
+    const want = a >= 1.05 ? true : a <= 0.95 ? false : LANDSCAPE;
+    if (want !== LANDSCAPE) applyLayout(want, a);
+    else if (!LANDSCAPE && Math.abs(dimsFor(false, a).U - FIELD.U) / FIELD.U > 0.12) applyLayout(false, a);
   }, 250);
 });
 setHint();
