@@ -574,6 +574,7 @@ function resetGame(newLevel = 1) {
     layer.ball.speed = layer.def.baseSpeed * SPEED_MUL + (level - 1) * 0.7;
     layer.ball.mode = 'ready';
     layer.ball.vu = 0; layer.ball.vv = 0;
+    layer.ball.mesh.scale.setScalar(1);
     for (const m of layer.ball.trail) m.material.opacity = 0;
     parkBall(layer.ball);
   }

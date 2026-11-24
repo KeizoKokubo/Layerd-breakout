@@ -544,7 +544,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'ArrowDown' || e.code === 'KeyS') { keys.down = true; e.preventDefault(); }
   if (e.code === 'Space') {
     e.preventDefault();
-    if (state === 'ready') launchBall();
+    if (state === 'ready') { hideOverlay(); launchBall(); }
     else if (state === 'playing') { state = 'paused'; showOverlay('PAUSED', '一時停止中。', '▶ 再開する'); }
     else if (state === 'paused') { state = 'playing'; hideOverlay(); }
   }
